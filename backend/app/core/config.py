@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     WHISPER_SIZE: str = "base"
     EMBED_MODEL: str = "sentence-transformers/all-MiniLM-L6-v2"
     EMBED_DIM: int = 384
+    CHUNK_SECONDS: float = 30.0
+    CHUNK_OVERLAP: float = 5.0
     GEMINI_API_KEY: str = ""
 
 

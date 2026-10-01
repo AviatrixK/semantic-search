@@ -14,5 +14,7 @@ os.environ.update({
     "S3_SECRET_KEY": "test",
     "S3_BUCKET": "test-videos",
     "EMBED_DIM": "384",
+    "CHUNK_SECONDS": "30",
+    "CHUNK_OVERLAP": "5",
     "GEMINI_API_KEY": "",
 })
