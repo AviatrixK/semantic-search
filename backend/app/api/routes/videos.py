@@ -19,7 +19,9 @@ def upload_video(file: UploadFile, admin: CurrentUser = Depends(require_admin), 
     if file.content_type not in ALLOWED:
         raise HTTPException(415, f"Unsupported type {file.content_type}")
     vid = uuid.uuid4()
-    ext = (file.filename or "video.mp4").rsplit(".", 1)[-1]
+    ext = (file.filename or "").rsplit(".", 1)[-1].lower() if "." in (file.filename or "") else ""
+    if not (ext.isalnum() and len(ext) <= 5):  # never trust a client filename inside a storage key
+        ext = "mp4"
     key = f"raw/{vid}.{ext}"
     storage.upload_fileobj(file.file, key, file.content_type)
 

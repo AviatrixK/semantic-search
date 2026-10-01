@@ -40,5 +40,5 @@ class Chunk(Base):
     start_sec: Mapped[float] = mapped_column(Float)
     end_sec: Mapped[float] = mapped_column(Float)
     text: Mapped[str] = mapped_column(Text)
-    embedding = mapped_column(Vector(settings.EMBED_DIM))
+    embedding = mapped_column(Vector(settings.EMBED_DIM), nullable=False)
     # `tsv` is a generated column in the DB; not mapped here so SQLAlchemy never writes it.

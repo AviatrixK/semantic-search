@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.models import Chunk, Video
@@ -21,7 +21,6 @@ def vector_search(db: Session, query: str, k: int = 10, video_id: uuid.UUID | No
 
 
 def log_query(db: Session, user_id: str, query: str, mode: str):
-    from sqlalchemy import text
     db.execute(text("INSERT INTO search_logs (id, user_id, query, mode) VALUES (:i, :u, :q, :m)"),
-               {"i": uuid.uuid4(), "u": user_id, "q": query, "m": mode})
+               {"i": uuid.uuid4(), "u": uuid.UUID(user_id), "q": query, "m": mode})
     db.commit()
