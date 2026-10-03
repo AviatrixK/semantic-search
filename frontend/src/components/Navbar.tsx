@@ -28,7 +28,10 @@ export default function Navbar() {
           <>
             <div className={styles.links}>
               <NavLink to="/" end className={linkClass}>
-                Home
+                Search
+              </NavLink>
+              <NavLink to="/library" className={linkClass}>
+                Library
               </NavLink>
               {user.role === 'admin' && (
                 <NavLink to="/admin" className={linkClass}>

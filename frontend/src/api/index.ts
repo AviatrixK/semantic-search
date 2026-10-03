@@ -6,13 +6,4 @@ export const api = createApiClient({
   runExclusive: webLocksRunner(),
 })
 
-export interface User {
-  id: string
-  email: string
-  role: 'user' | 'admin'
-}
-
-export interface TokenOut {
-  access_token: string
-  token_type: string
-}
+export type { Chunk, Job, SearchHit, StreamOut, TokenOut, UploadOut, User, Video } from './types'

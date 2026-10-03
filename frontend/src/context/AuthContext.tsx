@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import type { ReactNode } from 'react'
 import { api } from '../api'
 import type { TokenOut, User } from '../api'
+import { streamUrls } from '../api/streams'
 import { ApiError, describeError } from '../api/errors'
 
 export type AuthStatus = 'loading' | 'ready' | 'error'
@@ -28,7 +29,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const run = useRef(0)
 
   useEffect(() => api.onTokenChange(setAccessToken), [])
-  useEffect(() => api.onSessionExpired(() => setUser(null)), [])
+  useEffect(
+    () =>
+      api.onSessionExpired(() => {
+        streamUrls.clear()
+        setUser(null)
+      }),
+    [],
+  )
 
   // On load: trade the refresh cookie for an access token, then fetch the user. React StrictMode runs this effect
   // twice in dev; both calls share the client's single in-flight /auth/refresh, so only one request is sent.
@@ -80,6 +88,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Even if the server cannot be reached, forget the session locally.
     }
     api.setToken(null)
+    streamUrls.clear()
     setUser(null)
   }, [])
 

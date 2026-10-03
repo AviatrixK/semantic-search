@@ -1,0 +1,110 @@
+.page {
+  max-width: 80rem;
+  margin: 0 auto;
+  padding: 1rem 1rem 3rem;
+}
+
+.crumbs {
+  margin: 0 0 0.75rem;
+  font-size: 0.9rem;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+  gap: 1.5rem;
+  align-items: start;
+}
+
+/* player stays in view while the transcript scrolls */
+.playerCol {
+  position: sticky;
+  top: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.info h1 {
+  margin: 0 0 0.25rem;
+  font-size: 1.25rem;
+}
+
+.info p {
+  margin: 0.25rem 0;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+}
+
+.copied {
+  font-size: 0.85rem;
+  color: var(--ok);
+  word-break: break-all;
+}
+
+.warn {
+  color: var(--muted);
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.transcriptCol {
+  --transcript-height: calc(100vh - 7rem);
+  min-width: 0;
+}
+
+.transcriptCol h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1.05rem;
+}
+
+.error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.65rem 0.8rem;
+  border-radius: 8px;
+  background: var(--danger-bg);
+  border: 1px solid var(--danger-border);
+  color: var(--danger);
+}
+
+/* narrow screens: stacked, with the player pinned to the top while the transcript scrolls under it */
+@media (max-width: 60rem) {
+  /* A plain block (not a one-column grid): a sticky grid item can only move inside its own grid row, so the player
+     would never stay pinned while the transcript row scrolls. In a block, it sticks for the whole container. */
+  .layout {
+    display: block;
+  }
+
+  .transcriptCol {
+    margin-top: 1rem;
+  }
+
+  .playerCol {
+    top: 0;
+    z-index: 2;
+    padding: 0.5rem 0;
+    background: var(--bg);
+  }
+
+  .info {
+    display: none;
+  }
+
+  .transcriptCol {
+    --transcript-height: 60vh;
+  }
+}

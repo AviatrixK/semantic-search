@@ -1,0 +1,54 @@
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 1rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.title {
+  margin: 0;
+  font-size: 1rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stage {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.pct {
+  font-variant-numeric: tabular-nums;
+}
+
+.error,
+.warn,
+.ok {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.error {
+  color: var(--danger);
+}
+
+.warn {
+  color: var(--muted);
+}
+
+.ok {
+  color: var(--ok);
+}

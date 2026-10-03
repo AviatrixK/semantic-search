@@ -4,19 +4,43 @@ export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>
 /** Runs `fn` while holding a lock shared by all tabs of this site (see webLocksRunner). */
 export type LockRunner = <T>(fn: () => Promise<T>) => Promise<T>
 
+/** The slice of XMLHttpRequest the upload code uses (so tests can supply a fake). */
+export interface XhrLike {
+  open(method: string, url: string): void
+  setRequestHeader(name: string, value: string): void
+  send(body: FormData): void
+  abort(): void
+  getAllResponseHeaders(): string
+  withCredentials: boolean
+  status: number
+  responseText: string
+  upload: { onprogress: ((e: { lengthComputable: boolean; loaded: number; total: number }) => void) | null }
+  onload: (() => void) | null
+  onerror: (() => void) | null
+  ontimeout: (() => void) | null
+  onabort: (() => void) | null
+}
+
 export interface ClientOptions {
   baseUrl?: string
   fetch?: FetchLike
   runExclusive?: LockRunner
+  xhr?: () => XhrLike
 }
 
 export interface RequestOptions {
   method?: string
   /** Serialised as JSON with the right Content-Type. */
   json?: unknown
-  /** Raw body (e.g. FormData for uploads). */
+  /** Raw body (e.g. FormData). */
   body?: BodyInit
   headers?: Record<string, string>
+  signal?: AbortSignal
+}
+
+export interface UploadOptions {
+  /** Bytes sent so far / total. Called again from zero if the upload is retried after a token refresh. */
+  onProgress?: (loaded: number, total: number) => void
   signal?: AbortSignal
 }
 
@@ -29,6 +53,8 @@ export interface ApiClient {
   /** Gets a new access token with the refresh cookie. At most one request in flight, across tabs. */
   refresh(): Promise<string | null>
   request<T = unknown>(path: string, options?: RequestOptions): Promise<T>
+  /** POST a FormData with upload progress (fetch cannot report upload progress, XMLHttpRequest can). */
+  upload<T = unknown>(path: string, form: FormData, options?: UploadOptions): Promise<T>
 }
 
 const AUTH_PATHS = ['/auth/login', '/auth/register', '/auth/refresh', '/auth/logout']
@@ -47,9 +73,25 @@ export function webLocksRunner(name = 'svs-auth-refresh'): LockRunner {
   }
 }
 
+function abortError(): DOMException {
+  return new DOMException('Aborted', 'AbortError')
+}
+
+/** Builds a fetch-style Response from a finished XHR so uploads share the error/parse code with request(). */
+function xhrToResponse(xhr: XhrLike): Response {
+  const headers = new Headers()
+  for (const line of xhr.getAllResponseHeaders().trim().split(/[\r\n]+/)) {
+    const i = line.indexOf(':')
+    if (i > 0) headers.append(line.slice(0, i).trim(), line.slice(i + 1).trim())
+  }
+  const noBody = xhr.status === 204 || xhr.status === 205 || xhr.status === 304
+  return new Response(noBody ? null : xhr.responseText, { status: xhr.status, headers })
+}
+
 export function createApiClient(options: ClientOptions = {}): ApiClient {
   const baseUrl = options.baseUrl ?? ''
   const doFetch: FetchLike = options.fetch ?? ((input, init) => fetch(input, init))
+  const newXhr: () => XhrLike = options.xhr ?? (() => new XMLHttpRequest() as unknown as XhrLike)
   const runExclusive = options.runExclusive ?? noLock
 
   let token: string | null = null
@@ -90,6 +132,27 @@ export function createApiClient(options: ClientOptions = {}): ApiClient {
     }
   }
 
+  function sendXhr(path: string, form: FormData, accessToken: string | null, o: UploadOptions): Promise<Response> {
+    return new Promise((resolve, reject) => {
+      if (o.signal?.aborted) return reject(abortError())
+      const xhr = newXhr()
+      xhr.open('POST', baseUrl + path)
+      xhr.withCredentials = true
+      xhr.setRequestHeader('Accept', 'application/json')
+      if (accessToken) xhr.setRequestHeader('Authorization', `Bearer ${accessToken}`)
+      // No Content-Type: the browser must set multipart/form-data with its boundary itself.
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) o.onProgress?.(e.loaded, e.total)
+      }
+      xhr.onload = () => resolve(xhrToResponse(xhr))
+      xhr.onerror = () => reject(new NetworkError())
+      xhr.ontimeout = () => reject(new NetworkError('The upload timed out'))
+      xhr.onabort = () => reject(abortError())
+      o.signal?.addEventListener('abort', () => xhr.abort(), { once: true })
+      xhr.send(form)
+    })
+  }
+
   async function toApiError(res: Response): Promise<ApiError> {
     let parsed: unknown
     try {
@@ -125,9 +188,10 @@ export function createApiClient(options: ClientOptions = {}): ApiClient {
     return inflight
   }
 
-  async function request<T>(path: string, o: RequestOptions = {}): Promise<T> {
+  /** Sends with the current token; on 401 refreshes once and retries once; throws ApiError for any non-2xx. */
+  async function withAuthRetry(path: string, sender: (accessToken: string | null) => Promise<Response>): Promise<Response> {
     const sentWith = token
-    let res = await send(path, o, sentWith)
+    let res = await sender(sentWith)
 
     if (res.status === 401 && !AUTH_PATHS.includes(path)) {
       // If another request refreshed while ours was in flight, just retry with the newer token.
@@ -136,7 +200,7 @@ export function createApiClient(options: ClientOptions = {}): ApiClient {
         expireSession()
         throw new ApiError(401, 'Your session has expired. Please log in again.')
       }
-      res = await send(path, o, fresh)
+      res = await sender(fresh)
       if (res.status === 401) {
         expireSession()
         throw await toApiError(res)
@@ -144,6 +208,10 @@ export function createApiClient(options: ClientOptions = {}): ApiClient {
     }
 
     if (!res.ok) throw await toApiError(res)
+    return res
+  }
+
+  async function parse<T>(res: Response): Promise<T> {
     if (res.status === 204) return undefined as T
     return (res.headers.get('Content-Type') ?? '').includes('json') ? ((await res.json()) as T) : (undefined as T)
   }
@@ -160,6 +228,11 @@ export function createApiClient(options: ClientOptions = {}): ApiClient {
       return () => expiredListeners.delete(cb)
     },
     refresh,
-    request,
+    async request<T>(path: string, o: RequestOptions = {}) {
+      return parse<T>(await withAuthRetry(path, (t) => send(path, o, t)))
+    },
+    async upload<T>(path: string, form: FormData, o: UploadOptions = {}) {
+      return parse<T>(await withAuthRetry(path, (t) => sendXhr(path, form, t, o)))
+    },
   }
 }

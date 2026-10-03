@@ -6,5 +6,5 @@
     "rootDir": "src",
     "types": []
   },
-  "include": ["src/api/client.ts", "src/api/errors.ts", "src/lib/password.ts"]
+  "include": ["src/api/client.ts", "src/api/errors.ts", "src/lib/*.ts"]
 }
