@@ -70,6 +70,25 @@ and jump to timestamps; a Gemini tool-calling agent answers multi-step questions
   `docker compose exec postgres psql -U svs -d postgres -P pager=off -c "CREATE DATABASE svs_test;"`
   (fresh volumes get it from `db/00-create-test-db.sql`). Run: `docker compose exec api pytest`. Inside Docker a missing test DB
   fails loudly; on a bare machine integration tests skip. Tests never load Whisper or embedding models.
+- **Search (`/api/search`):** `retrieval.vector_search` over-fetches 3x, drops hits below `MIN_SCORE` (0.25), dedupes overlapping
+  hits of the same video (greedy, best score wins; touching ranges are not overlaps), then keeps k. The threshold and dedupe are
+  pure functions in `services/search_logic.py` (unit-tested without DB or model). Filters: `video_id`, `uploaded_after` (date, UTC,
+  inclusive). Query embeddings are cached in Redis (`emb:` + sha256(model + query), TTL 1 day, fail-open). Response header
+  `X-Search-Ms` (exposed through CORS). `highlight` = best sentence of the chunk by cosine.
+- **Highlights use stored sentence vectors.** Embedding ~80 sentences at query time measured ~525 ms on this CPU (budget 50 ms), so
+  the worker embeds each multi-sentence chunk's sentences once at ingest into `chunk_sentences` (`services/sentences.py`); search
+  only reads them (~13 ms for k=10). Chunks without usable stored rows fall back to on-the-fly embedding (correct, slow), and a
+  missing table degrades the same way. Old data: `python -m app.scripts.backfill_sentences`. Never embed sentences per request
+  when stored ones exist. Measured: cold query embedding ~98 ms, cached ~0.5 ms, search without highlight ~4 ms inside Docker.
+- **Highlight sentences must be whole sentences.** `split_sentences` splits on . ! ? only before a capital/digit/quote and never after
+  abbreviations (Dr., e.g.) or initials; a sentence stays whole up to 80 words (never cut into fixed word windows: that produced
+  "world, I've discovered ... how they use their voice, how"). Only longer run-ons are cut, at clause punctuation, and a cut never
+  lands after a dangling word (the/to/and/how...). Unfinished fragments at a chunk edge are trimmed of trailing dangling words. A chunk
+  that starts mid-sentence still yields a lowercase first fragment: its own text cannot complete it. **Changing the splitter makes
+  stored `chunk_sentences` stale (search then falls back to slow on-the-fly embedding): re-run `backfill_sentences`, which rebuilds
+  stale rows too, and restart the worker.**
+- **pgvector HNSW gotcha:** it returns at most `hnsw.ef_search` (default 40) rows regardless of LIMIT and applies WHERE filters after
+  the index scan; `vector_search` does `SET LOCAL hnsw.ef_search` to cover its candidate limit.
 - **Dev machine:** Windows + PowerShell, Python 3.13 in `backend\.venv`, Docker Desktop (WSL 2), ffmpeg on PATH. The project
   path contains spaces: quote every path in commands and scripts. Internet is slow/unreliable: avoid forcing large
   re-downloads and ask before adding a heavy dependency.

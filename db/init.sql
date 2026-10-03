@@ -54,6 +54,16 @@ CREATE INDEX chunks_embedding_hnsw ON chunks USING hnsw (embedding vector_cosine
 CREATE INDEX chunks_tsv_gin ON chunks USING gin (tsv);
 CREATE INDEX chunks_video_idx ON chunks (video_id);
 
+-- One row per sentence of multi-sentence chunks; powers search highlights without embedding at query time.
+CREATE TABLE chunk_sentences (
+  id          UUID PRIMARY KEY,
+  chunk_id    UUID NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
+  idx         INT NOT NULL,
+  text        TEXT NOT NULL,
+  embedding   VECTOR(384) NOT NULL,   -- must match EMBED_DIM
+  CONSTRAINT chunk_sentences_chunk_id_idx_key UNIQUE (chunk_id, idx)
+);
+
 CREATE TABLE search_logs (
   id          UUID PRIMARY KEY,
   user_id     UUID REFERENCES users(id) ON DELETE SET NULL,

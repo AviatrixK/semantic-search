@@ -35,3 +35,4 @@ class SearchHit(BaseModel):
     end_sec: float
     text: str
     score: float
+    highlight: str | None = None

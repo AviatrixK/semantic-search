@@ -49,6 +49,8 @@ os.environ.update({
     "RATE_LOGIN_PER_MIN": "5",
     "RATE_SEARCH_PER_MIN": "30",
     "RATE_ASK_PER_MIN": "10",
+    "MIN_SCORE": "0.25",
+    "EMBED_CACHE_TTL_SEC": "86400",
     "GEMINI_API_KEY": "",
 })
 

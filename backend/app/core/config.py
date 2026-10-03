@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     RATE_LOGIN_PER_MIN: int = 5  # per client IP + email
     RATE_SEARCH_PER_MIN: int = 30  # per user
     RATE_ASK_PER_MIN: int = 10  # per user
+    MIN_SCORE: float = 0.25  # cosine similarity below this is dropped from search results
+    EMBED_CACHE_TTL_SEC: int = 86400
     GEMINI_API_KEY: str = ""
 
 

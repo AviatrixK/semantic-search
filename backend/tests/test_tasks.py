@@ -51,9 +51,22 @@ def test_success_stores_transcript_and_chunks_idempotently(env):
     assert key == f"transcripts/{env.video.id}.json"
     assert payload["segments"] == SEGMENTS and payload["language"] == "en"
     env.db.query.return_value.filter.return_value.delete.assert_called_once()  # old chunks replaced first
-    chunks = list(env.db.add_all.call_args[0][0])
+    chunks = list(env.db.add_all.call_args_list[0][0][0])
     assert len(chunks) == 1 and chunks[0].idx == 0 and chunks[0].text == "hello world"
     env.retry.assert_not_called()
+
+
+def test_ingest_stores_sentence_embeddings_after_their_chunks_exist(env):
+    segs = [{"start": 0.0, "end": 5.0, "text": "Hello there."}, {"start": 5.0, "end": 9.0, "text": "How are you?"}]
+    with patch.object(transcription, "transcribe", return_value=(segs, "en")):
+        run(env)
+    names = [c[0] for c in env.db.method_calls if c[0] in ("query", "add_all", "flush")]
+    assert names == ["query", "add_all", "flush", "add_all"]  # delete old, insert chunks, flush, insert sentences
+    chunks = list(env.db.add_all.call_args_list[0][0][0])
+    sentence_rows = list(env.db.add_all.call_args_list[1][0][0])
+    assert [(s.idx, s.text) for s in sentence_rows] == [(0, "Hello there."), (1, "How are you?")]
+    assert {s.chunk_id for s in sentence_rows} == {chunks[0].id}  # FK target is the chunk inserted just before
+    assert env.job.stage == "done"
 
 
 def test_no_speech_fails_job_with_readable_message_and_no_retry(env):

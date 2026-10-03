@@ -46,6 +46,21 @@ curl localhost:8000/api/jobs/<job_id> -H "Authorization: Bearer $TOKEN"        #
 curl "localhost:8000/api/search?q=how+do+interest+rates+work" -H "Authorization: Bearer $TOKEN"
 ```
 
+## Search
+`GET /api/search?q=...` (login required, 30/min per user). Optional: `k` (1-50, default 10), `video_id`, `uploaded_after=YYYY-MM-DD`
+(videos uploaded on/after that day, UTC), `highlight=false`. Hits below `MIN_SCORE` (default 0.25) are dropped, overlapping chunks of
+the same video are collapsed to the best one, and each hit carries `highlight`, the sentence of the chunk that best matches the query.
+The `X-Search-Ms` response header reports server time. Query embeddings are cached in Redis for a day, so a repeated query skips the model.
+
+Sentence vectors for highlights are computed at ingest. For videos ingested before Phase 4, one-time (existing database):
+```powershell
+docker compose exec postgres psql -U svs -P pager=off -c "CREATE TABLE IF NOT EXISTS chunk_sentences (id UUID PRIMARY KEY, chunk_id UUID NOT NULL REFERENCES chunks(id) ON DELETE CASCADE, idx INT NOT NULL, text TEXT NOT NULL, embedding VECTOR(384) NOT NULL, CONSTRAINT chunk_sentences_chunk_id_idx_key UNIQUE (chunk_id, idx));"
+docker compose restart worker
+docker compose exec api python -m app.scripts.backfill_sentences
+```
+Until the backfill runs, highlights still work but are computed per request (about half a second).
+Re-run the backfill whenever the sentence splitter changes: it rebuilds stale rows as well as filling in missing ones.
+
 ## Smoke test the pipeline (PowerShell, stack running)
 ```powershell
 .\scripts\smoke_ingest.ps1 -Email admin@example.com -Password 'ChangeMe123!' -File "sample\purpose.mp4" -ExpectedChunks 59

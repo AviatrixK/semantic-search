@@ -10,7 +10,7 @@ from celery.utils.log import get_task_logger
 
 from app.core.db import SessionLocal
 from app.models import Chunk, Job, Video
-from app.services import chunking, embedding, media, storage, tokens, transcription
+from app.services import chunking, embedding, media, sentences, storage, tokens, transcription
 from app.workers.celery_app import celery
 
 log = get_task_logger(__name__)
@@ -99,11 +99,15 @@ def _ingest(db, video_id, job_id):
     if not spans:
         raise transcription.NoSpeechError("no chunks produced from transcript")
     vectors = embedding.embed_batch([s.text for s in spans])
+    chunks = [Chunk(id=uuid.uuid4(), video_id=video.id, idx=i, start_sec=s.start, end_sec=s.end, text=s.text,
+                    embedding=v) for i, (s, v) in enumerate(zip(spans, vectors))]
+    sentence_rows = sentences.build_rows([(c.id, c.text) for c in chunks])  # model work before touching the DB
     # Idempotent: delete + insert + status flip all commit together in the final _set, so a retry or a
-    # reprocess can never leave duplicate or half-written chunks.
+    # reprocess can never leave duplicate or half-written chunks (old sentences go with their chunks: ON DELETE CASCADE).
     db.query(Chunk).filter(Chunk.video_id == video.id).delete()
-    db.add_all(Chunk(video_id=video.id, idx=i, start_sec=s.start, end_sec=s.end, text=s.text, embedding=v)
-               for i, (s, v) in enumerate(zip(spans, vectors)))
+    db.add_all(chunks)
+    db.flush()  # no relationship(), so SQLAlchemy does not order the inserts: chunks must exist first
+    db.add_all(sentence_rows)
     video.status = "ready"
     _set(db, job_id, "done", 100)
 

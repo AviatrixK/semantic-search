@@ -43,3 +43,13 @@ class Chunk(Base):
     text: Mapped[str] = mapped_column(Text)
     embedding = mapped_column(Vector(settings.EMBED_DIM), nullable=False)
     # `tsv` is a generated column in the DB; not mapped here so SQLAlchemy never writes it.
+
+
+class ChunkSentence(Base):
+    __tablename__ = "chunk_sentences"
+    __table_args__ = (UniqueConstraint("chunk_id", "idx", name="chunk_sentences_chunk_id_idx_key"),)
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    chunk_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("chunks.id", ondelete="CASCADE"))
+    idx: Mapped[int] = mapped_column(Integer)
+    text: Mapped[str] = mapped_column(Text)
+    embedding = mapped_column(Vector(settings.EMBED_DIM), nullable=False)

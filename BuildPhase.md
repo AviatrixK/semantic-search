@@ -204,7 +204,7 @@ We are on Phase 4. Goal: a solid semantic search endpoint the frontend and agent
 2. Deduplicate overlapping hits: if two hits are from the same video and overlap in time, keep the higher score.
 3. Optional filters on /api/search: video_id, uploaded_after (date).
 4. Cache query embeddings in Redis (key = sha256(model+query), TTL 1 day).
-5. Add `highlight`: return the sentence within the chunk that best matches the query (embed sentences, pick max cosine) — keep it under 50ms for k=10.
+5. Add `highlight`: return the sentence within the chunk that best matches the query (embed sentences, pick max cosine) — keep it under 50ms for k=10. (Measured: embedding sentences at query time takes ~500 ms on CPU, so sentence vectors are stored at ingest in `chunk_sentences` and only looked up at search time.)
 6. Return response timing in a header X-Search-Ms.
 7. Unit tests for dedupe and threshold logic (pure functions, no DB).
 ```

@@ -16,7 +16,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Semantic Video Search", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=settings.CORS_ORIGINS, allow_credentials=True,
-                   allow_methods=["*"], allow_headers=["*"])
+                   allow_methods=["*"], allow_headers=["*"],
+                   expose_headers=["X-Search-Ms", "Retry-After"])  # let the browser read these
 app.include_router(auth.router)
 app.include_router(videos.router)
 app.include_router(search.router)
