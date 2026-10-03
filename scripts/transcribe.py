@@ -40,6 +40,8 @@ def main():
         with tempfile.TemporaryDirectory() as tmp:
             wav = media.extract_audio(str(video), str(Path(tmp) / "audio.wav"))
             segments, language = transcription.transcribe(wav)
+    except transcription.NoSpeechError:
+        sys.exit("No speech detected in this video")  # non-zero exit, no transcript file written
     except media.MediaError as e:
         sys.exit(f"error: {e}")
 

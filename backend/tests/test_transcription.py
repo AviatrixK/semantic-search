@@ -1,8 +1,10 @@
 import wave
+from unittest.mock import patch
 
 import numpy as np
 import pytest
 
+from app.services import transcription
 from app.services.transcription import _load_wav
 
 
@@ -35,3 +37,32 @@ def test_load_wav_empty_audio(tmp_path):
 def test_load_wav_rejects_wrong_format(tmp_path, kw):
     with pytest.raises(ValueError):
         _load_wav(write_wav(tmp_path / "bad.wav", **kw))
+
+
+class FakeSeg:
+    def __init__(self, start, end, text):
+        self.start, self.end, self.text = start, end, text
+
+
+class FakeModel:
+    def __init__(self, segs):
+        self.segs, self.got = segs, None
+
+    def transcribe(self, audio, **kw):
+        self.got = audio
+        return iter(self.segs), type("Info", (), {"language": "en"})()
+
+
+def test_transcribe_passes_array_not_path_and_cleans_segments(tmp_path):
+    model = FakeModel([FakeSeg(0.004, 1.236, " hello "), FakeSeg(1.3, 2.0, "   ")])
+    with patch("app.services.transcription._model", return_value=model):
+        segs, lang = transcription.transcribe(write_wav(tmp_path / "a.wav"))
+    assert isinstance(model.got, np.ndarray) and model.got.dtype == np.float32
+    assert segs == [{"start": 0.0, "end": 1.24, "text": "hello"}] and lang == "en"
+
+
+@pytest.mark.parametrize("segs", [[], [FakeSeg(0, 1, "  "), FakeSeg(1, 2, "")]])
+def test_no_speech_raises(tmp_path, segs):
+    with patch("app.services.transcription._model", return_value=FakeModel(segs)):
+        with pytest.raises(transcription.NoSpeechError, match="No speech detected in this video"):
+            transcription.transcribe(write_wav(tmp_path / "a.wav"))

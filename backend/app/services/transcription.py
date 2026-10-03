@@ -6,6 +6,10 @@ from functools import lru_cache
 from app.core.config import settings
 
 
+class NoSpeechError(Exception):
+    """Transcription produced no text (silent or music-only audio)."""
+
+
 @lru_cache
 def _model():
     from faster_whisper import WhisperModel  # heavy import: load once per process
@@ -23,4 +27,7 @@ def transcribe(wav_path: str) -> tuple[list[dict], str]:
     """Returns ([{start, end, text}], detected_language)."""
     segments, info = _model().transcribe(_load_wav(wav_path), vad_filter=True)
     out = [{"start": round(s.start, 2), "end": round(s.end, 2), "text": s.text.strip()} for s in segments]
-    return [s for s in out if s["text"]], info.language
+    out = [s for s in out if s["text"]]
+    if not out:
+        raise NoSpeechError("No speech detected in this video")
+    return out, info.language
