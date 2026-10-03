@@ -78,6 +78,25 @@ If it fails with "could not create unique index", duplicates exist: reprocess th
 | GET | /api/videos, /api/videos/{id}/stream, /api/videos/{id}/transcript, /api/jobs/{id}, /api/search | logged in |
 
 ## Tests
+Integration tests run against a separate `svs_test` database and Redis db 15, so your dev data is never touched.
+One-time setup on an existing database volume (fresh volumes create it automatically):
+```powershell
+docker compose exec postgres psql -U svs -d postgres -P pager=off -c "CREATE DATABASE svs_test;"
+docker compose up -d        # recreates api/worker: mounts ./db for the tests, runs Celery beat in the worker
+docker compose exec api pytest
+```
+Without Docker (`cd backend; pytest`), unit tests run and integration tests skip unless Postgres/Redis are reachable on localhost
+(`TEST_DATABASE_URL` / `TEST_REDIS_URL` override the defaults).
+
+Auth: passwords need 8+ characters with a letter and a digit. Rate limits (429 + `Retry-After`): login 5/min per IP+email,
+search 30/min per user. Expired refresh tokens are deleted hourly.
+
+Existing databases need this once (Phase 3 index):
+```powershell
+docker compose exec postgres psql -U svs -P pager=off -c "CREATE INDEX IF NOT EXISTS refresh_tokens_user_idx ON refresh_tokens (user_id);"
+```
+
+Unit tests only:
 ```bash
 cd backend && pip install -r requirements.txt && pytest
 ```

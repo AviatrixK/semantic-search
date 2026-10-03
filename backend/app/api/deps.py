@@ -4,7 +4,8 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.core.security import decode_access_token
 
-bearer = HTTPBearer()
+bearer = HTTPBearer(auto_error=False)  # we raise 401 ourselves (HTTPBearer's default is 403)
+UNAUTHENTICATED = {"WWW-Authenticate": "Bearer"}
 
 
 class CurrentUser(dict):
@@ -17,11 +18,13 @@ class CurrentUser(dict):
         return self["role"]
 
 
-def current_user(cred: HTTPAuthorizationCredentials = Depends(bearer)) -> CurrentUser:
+def current_user(cred: HTTPAuthorizationCredentials | None = Depends(bearer)) -> CurrentUser:
+    if cred is None:
+        raise HTTPException(401, "Not authenticated", headers=UNAUTHENTICATED)
     try:
         data = decode_access_token(cred.credentials)
     except jwt.PyJWTError:
-        raise HTTPException(401, "Invalid or expired token")
+        raise HTTPException(401, "Invalid or expired token", headers=UNAUTHENTICATED)
     return CurrentUser(id=data["sub"], role=data["role"])
 
 

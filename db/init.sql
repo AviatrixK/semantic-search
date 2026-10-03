@@ -17,6 +17,8 @@ CREATE TABLE refresh_tokens (
   revoked     BOOLEAN NOT NULL DEFAULT false
 );
 
+CREATE INDEX refresh_tokens_user_idx ON refresh_tokens (user_id);
+
 CREATE TABLE videos (
   id            UUID PRIMARY KEY,
   title         TEXT NOT NULL,

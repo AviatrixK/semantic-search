@@ -100,7 +100,7 @@ def test_endpoints_require_login():
     c = TestClient(app)
     for method, path in [("post", "/api/videos"), ("post", f"/api/videos/{VIDEO_ID}/reprocess"),
                          ("get", f"/api/videos/{VIDEO_ID}/transcript")]:
-        assert getattr(c, method)(path).status_code in (401, 403), path
+        assert getattr(c, method)(path).status_code == 401, path
 
 
 def test_reprocess_enqueues_new_job(client, db):

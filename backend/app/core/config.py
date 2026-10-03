@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     CHUNK_SECONDS: float = 30.0
     CHUNK_OVERLAP: float = 5.0
     MAX_UPLOAD_MB: int = 500
+    RATE_LOGIN_PER_MIN: int = 5  # per client IP + email
+    RATE_SEARCH_PER_MIN: int = 30  # per user
+    RATE_ASK_PER_MIN: int = 10  # per user
     GEMINI_API_KEY: str = ""
 
 

@@ -10,7 +10,7 @@ from celery.utils.log import get_task_logger
 
 from app.core.db import SessionLocal
 from app.models import Chunk, Job, Video
-from app.services import chunking, embedding, media, storage, transcription
+from app.services import chunking, embedding, media, storage, tokens, transcription
 from app.workers.celery_app import celery
 
 log = get_task_logger(__name__)
@@ -129,5 +129,17 @@ def ingest_video(self, video_id: str, job_id: str):
             raise self.retry(exc=exc, countdown=retry_delay(self.request.retries))
         _fail(db, video_id, job_id, user_message(exc))
         raise
+    finally:
+        db.close()
+
+
+@celery.task
+def purge_expired_tokens() -> int:
+    """Periodic (Celery beat, hourly): delete expired refresh tokens."""
+    db = SessionLocal()
+    try:
+        n = tokens.purge_expired_refresh_tokens(db)
+        log.info("purged %s expired refresh token(s)", n)
+        return n
     finally:
         db.close()

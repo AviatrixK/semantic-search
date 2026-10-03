@@ -8,6 +8,7 @@ services:
     ports: ["5432:5432"]
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./db/00-create-test-db.sql:/docker-entrypoint-initdb.d/00-create-test-db.sql:ro
       - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U svs"]
@@ -29,7 +30,7 @@ services:
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     env_file: .env
     ports: ["8000:8000"]
-    volumes: [./backend:/app]
+    volumes: [./backend:/app, ./db:/db:ro]  # /db: tests rebuild svs_test from db/init.sql
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_started }
@@ -37,7 +38,7 @@ services:
 
   worker:
     build: ./backend
-    command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=1
+    command: celery -A app.workers.celery_app worker -B -s /tmp/celerybeat-schedule --loglevel=info --concurrency=1
     env_file: .env
     volumes: [./backend:/app]
     depends_on:

@@ -60,6 +60,16 @@ and jump to timestamps; a Gemini tool-calling agent answers multi-step questions
 - **psql:** always pass `-P pager=off` (e.g. `docker compose exec postgres psql -U svs -P pager=off -c "..."`).
 - **Smoke script** must work on Windows PowerShell 5.1: no `Invoke-WebRequest -Headers @{Range=...}` (use `curl.exe -r`), no
   PS7-only syntax.
+- **Auth rules:** passwords need 8+ chars with a letter and a digit (max 72 bytes: bcrypt limit). Refresh tokens are single-use
+  (atomic claim); presenting a revoked one revokes ALL of that user's tokens. Missing/invalid access token -> 401 (never 403).
+  Rate limits (Redis fixed window, `app/core/ratelimit.py`, fail-open if Redis is down): login 5/min per IP+email, search 30/min
+  and ask 10/min per user -> 429 + `Retry-After`. Expired refresh tokens are purged hourly by Celery beat (worker runs with `-B`).
+- **Tests:** unit tests need no services. Integration tests use the `svs_test` database (rebuilt from `db/init.sql` each session,
+  truncated per test) and Redis db 15 (flushed per test); conftest forces both and refuses anything else, so dev data and
+  dev limiter state are never touched. Create the DB once on an existing volume:
+  `docker compose exec postgres psql -U svs -d postgres -P pager=off -c "CREATE DATABASE svs_test;"`
+  (fresh volumes get it from `db/00-create-test-db.sql`). Run: `docker compose exec api pytest`. Inside Docker a missing test DB
+  fails loudly; on a bare machine integration tests skip. Tests never load Whisper or embedding models.
 - **Dev machine:** Windows + PowerShell, Python 3.13 in `backend\.venv`, Docker Desktop (WSL 2), ffmpeg on PATH. The project
   path contains spaces: quote every path in commands and scripts. Internet is slow/unreliable: avoid forcing large
   re-downloads and ask before adding a heavy dependency.
@@ -67,5 +77,5 @@ and jump to timestamps; a Gemini tool-calling agent answers multi-step questions
 ## Commands
 - Stack: `docker compose up --build`
 - Admin: `docker compose exec api python -m app.scripts.create_admin <email> <password>`
-- Tests: `cd backend; pytest`
+- Tests: `docker compose exec api pytest` (all) or `cd backend; pytest` (unit tests; integration skip without svs_test)
 - Frontend: `cd frontend; npm run dev` (http://localhost:5173)
