@@ -101,6 +101,14 @@ and jump to timestamps; a Gemini tool-calling agent answers multi-step questions
   Auth endpoints never trigger a refresh. 429 -> message from `Retry-After` and a disabled button with a countdown.
 - **Frontend tests:** `cd frontend; npm test` (tsc compiles src/api + src/lib, then Node's built-in test runner on `tests/*.test.mjs`;
   no test framework dependency). Logic that must be tested lives outside React components.
+- **Admin videos page (`/admin`, `pages/AdminVideos.tsx`).** Uploads use `api.upload` (XMLHttpRequest, for progress events) which shares
+  `withAuthRetry` with `api.request`: same 401 -> single-flight refresh -> retry, same ApiError. Uploads go ONE AT A TIME (queue reducer
+  in `lib/uploadQueue.ts`); server-side processing of earlier files runs in parallel, each with its own `JobStatus` card polling
+  `/api/jobs/{id}` every 2 s via `useJobPolling` -> `lib/poller.ts` (one request at a time, stops on done/failed or fatal 401/403/404,
+  backs off on errors, honours Retry-After on 429). `buildUploadForm` re-wraps the file with the right MIME type: browsers send "" for
+  .mkv and the backend answers 415. Client-side size/type checks use `VITE_MAX_UPLOAD_MB` (default 500): keep it equal to the backend's
+  `MAX_UPLOAD_MB`. `Video.status` "uploaded" means stored and waiting for / in processing (UI badge "Processing"); the table refreshes
+  itself every 5 s while any video is processing. `GET /api/videos` returns `created_at`.
 - **Dev machine:** Windows + PowerShell, Python 3.13 in `backend\.venv`, Docker Desktop (WSL 2), ffmpeg on PATH. The project
   path contains spaces: quote every path in commands and scripts. Internet is slow/unreliable: avoid forcing large
   re-downloads and ask before adding a heavy dependency.

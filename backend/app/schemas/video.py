@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from pydantic import BaseModel
 
 
@@ -19,6 +21,7 @@ class VideoOut(BaseModel):
     title: str
     status: str
     duration_sec: int | None
+    created_at: datetime
 
 
 class ChunkOut(BaseModel):

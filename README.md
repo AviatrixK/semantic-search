@@ -55,7 +55,14 @@ npm run dev        # http://localhost:5173
 ```
 Vite proxies `/api` and `/auth` to `http://localhost:8000` (set `API_TARGET` in `frontend/.env.local` to change it), so the
 refresh-token cookie is same-origin. Pages: Log in, Register, Home (placeholder), Admin (placeholder, admins only), 404.
-`npm run typecheck`, `npm run build`, `npm test` (client logic: refresh single-flight, 429 handling, two-tab safety).
+`npm run typecheck`, `npm run build`, `npm test` (client logic: refresh single-flight, 429 handling, two-tab safety, upload queue,
+job polling, formatting).
+
+**Admin page** (`/admin`, admins only): drag-and-drop or pick several videos, edit titles, upload them one after another with a progress
+bar, and watch each one's processing live (stage and progress, polled every 2 seconds, error text on failure). The library table shows
+title, duration (mm:ss), status, created date, and Reprocess / Delete (with confirmation). Friendly messages for 413 (too large),
+415 (unsupported type) and 429. If you change the backend's `MAX_UPLOAD_MB`, set the same value as `VITE_MAX_UPLOAD_MB` in
+`frontend/.env.local` so the browser rejects oversized files before uploading them.
 Create an admin to see the Admin link: `docker compose exec api python -m app.scripts.create_admin you@example.com 'YourPass123'`.
 
 ## Search

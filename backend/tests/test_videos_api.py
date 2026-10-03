@@ -103,6 +103,20 @@ def test_endpoints_require_login():
         assert getattr(c, method)(path).status_code == 401, path
 
 
+def test_list_videos_includes_created_at_for_the_admin_table(client, db):
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+    created = datetime(2026, 3, 4, 5, 6, 7, tzinfo=timezone.utc)
+    db.scalars.return_value.all.return_value = [
+        SimpleNamespace(id=VIDEO_ID, title="Talk", status="ready", duration_sec=1700, created_at=created),
+        SimpleNamespace(id=uuid.uuid4(), title="New", status="uploaded", duration_sec=None, created_at=created)]
+    r = client.get("/api/videos")
+    assert r.status_code == 200
+    assert r.json()[0] == {"id": str(VIDEO_ID), "title": "Talk", "status": "ready", "duration_sec": 1700,
+                           "created_at": "2026-03-04T05:06:07Z"}
+    assert r.json()[1]["duration_sec"] is None
+
+
 def test_reprocess_enqueues_new_job(client, db):
     db.get.return_value = MagicMock(status="ready")
     db.scalar.return_value = None  # no active job

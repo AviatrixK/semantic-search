@@ -89,7 +89,8 @@ def reprocess_video(video_id: uuid.UUID, _: CurrentUser = Depends(require_admin)
 @router.get("/videos", response_model=list[VideoOut])
 def list_videos(_: CurrentUser = Depends(current_user), db: Session = Depends(get_db)):
     rows = db.scalars(select(Video).order_by(Video.created_at.desc())).all()
-    return [VideoOut(id=str(v.id), title=v.title, status=v.status, duration_sec=v.duration_sec) for v in rows]
+    return [VideoOut(id=str(v.id), title=v.title, status=v.status, duration_sec=v.duration_sec, created_at=v.created_at)
+            for v in rows]
 
 
 @router.get("/videos/{video_id}/stream")
