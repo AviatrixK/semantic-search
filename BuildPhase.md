@@ -245,7 +245,7 @@ We are on Phase 5. Goal: React app skeleton with working login and protected rou
 4. Pages: Login, Register, Home (placeholder), NotFound. Components: ProtectedRoute (optional role="admin"), Navbar showing email + role + logout, admin link only for admins.
 5. Vite dev proxy: /api and /auth → http://localhost:8000 so cookies are same-origin in dev.
 6. Clean, minimal CSS: centered auth card, readable typography, loading and error states on every form.
-7. Add a frontend service to docker-compose (node:20, npm run dev -- --host).
+7. (Skipped by decision: the frontend runs on the host with `npm run dev`, because the node image is a large download. No compose service.)
 ```
 
 ### Concepts used

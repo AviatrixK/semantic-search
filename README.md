@@ -46,6 +46,18 @@ curl localhost:8000/api/jobs/<job_id> -H "Authorization: Bearer $TOKEN"        #
 curl "localhost:8000/api/search?q=how+do+interest+rates+work" -H "Authorization: Bearer $TOKEN"
 ```
 
+## Frontend (React + Vite + TypeScript)
+Runs on your machine, not in Docker. With the backend up (`docker compose up`):
+```powershell
+cd "C:\IMP\Career\WEB DEVELOPMENT\Semantic Video Search\frontend"
+npm install        # first time only
+npm run dev        # http://localhost:5173
+```
+Vite proxies `/api` and `/auth` to `http://localhost:8000` (set `API_TARGET` in `frontend/.env.local` to change it), so the
+refresh-token cookie is same-origin. Pages: Log in, Register, Home (placeholder), Admin (placeholder, admins only), 404.
+`npm run typecheck`, `npm run build`, `npm test` (client logic: refresh single-flight, 429 handling, two-tab safety).
+Create an admin to see the Admin link: `docker compose exec api python -m app.scripts.create_admin you@example.com 'YourPass123'`.
+
 ## Search
 `GET /api/search?q=...` (login required, 30/min per user). Optional: `k` (1-50, default 10), `video_id`, `uploaded_after=YYYY-MM-DD`
 (videos uploaded on/after that day, UTC), `highlight=false`. Hits below `MIN_SCORE` (default 0.25) are dropped, overlapping chunks of

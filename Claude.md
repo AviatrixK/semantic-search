@@ -89,6 +89,18 @@ and jump to timestamps; a Gemini tool-calling agent answers multi-step questions
   stale rows too, and restart the worker.**
 - **pgvector HNSW gotcha:** it returns at most `hnsw.ef_search` (default 40) rows regardless of LIMIT and applies WHERE filters after
   the index scan; `vector_search` does `SET LOCAL hnsw.ef_search` to cover its candidate limit.
+- **Frontend (`frontend/`, run with `npm run dev` on the host, NOT in Docker; no frontend compose service: node image is a big
+  download).** Dependencies are deliberately minimal: react, react-dom, react-router-dom, typescript, vite, plus the type-only
+  `@types/react` / `@types/react-dom` that TypeScript needs. Ask before adding anything else (no @vitejs/plugin-react, vitest,
+  eslint, axios...). Plain CSS modules. Vite proxies `/api` and `/auth` to the backend (override: `API_TARGET` in
+  `frontend/.env.local`), so the refresh cookie (path=/auth) is same-origin: never give frontend routes a path starting with
+  `/api` or `/auth`. Access token: memory only (never localStorage). All HTTP goes through `src/api/client.ts`.
+- **Refresh safety (client):** a refresh token is single-use and replaying one revokes every session, so there is only ever ONE
+  `/auth/refresh` in flight: in-tab single flight (parallel 401s, React StrictMode's double effect) plus a cross-tab Web Locks
+  mutex (all tabs share one cookie). A 401 retries once; refresh 401 -> log out; refresh network/5xx errors do NOT log out.
+  Auth endpoints never trigger a refresh. 429 -> message from `Retry-After` and a disabled button with a countdown.
+- **Frontend tests:** `cd frontend; npm test` (tsc compiles src/api + src/lib, then Node's built-in test runner on `tests/*.test.mjs`;
+  no test framework dependency). Logic that must be tested lives outside React components.
 - **Dev machine:** Windows + PowerShell, Python 3.13 in `backend\.venv`, Docker Desktop (WSL 2), ffmpeg on PATH. The project
   path contains spaces: quote every path in commands and scripts. Internet is slow/unreliable: avoid forcing large
   re-downloads and ask before adding a heavy dependency.

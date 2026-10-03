@@ -1,0 +1,77 @@
+.page {
+  display: grid;
+  place-items: start center;
+  padding: 3rem 1rem;
+}
+
+.card {
+  width: 100%;
+  max-width: 24rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 2rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.card h1 {
+  margin: 0;
+  font-size: 1.5rem;
+}
+
+.lead {
+  margin: -0.5rem 0 0;
+  color: var(--muted);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.9rem;
+  font-weight: 550;
+}
+
+.error {
+  padding: 0.65rem 0.8rem;
+  border-radius: 8px;
+  background: var(--danger-bg);
+  border: 1px solid var(--danger-border);
+  color: var(--danger);
+  font-size: 0.9rem;
+}
+
+.error[hidden] {
+  display: none;
+}
+
+.rules {
+  list-style: none;
+  margin: -0.4rem 0 0;
+  padding: 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.rules li {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.ok {
+  color: var(--ok);
+}
+
+.bad {
+  color: var(--danger);
+}
+
+.alt {
+  margin: 0;
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.9rem;
+}

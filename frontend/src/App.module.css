@@ -1,0 +1,10 @@
+.fatal {
+  max-width: 28rem;
+  margin: 4rem auto;
+  padding: 0 1rem;
+  text-align: center;
+}
+
+.fatal p {
+  color: var(--danger);
+}
