@@ -66,3 +66,13 @@ def test_no_speech_raises(tmp_path, segs):
     with patch("app.services.transcription._model", return_value=FakeModel(segs)):
         with pytest.raises(transcription.NoSpeechError, match="No speech detected in this video"):
             transcription.transcribe(write_wav(tmp_path / "a.wav"))
+
+
+def test_progress_callback_reports_position_and_duration(tmp_path):
+    model = FakeModel([FakeSeg(0, 1.0, "a"), FakeSeg(1.0, 2.0, "b")])
+    seen = []
+    one_sec = b"\x00\x00" * 16000
+    with patch("app.services.transcription._model", return_value=model):
+        transcription.transcribe(write_wav(tmp_path / "a.wav", frames=one_sec * 4),
+                                 on_progress=lambda done, total: seen.append((done, total)))
+    assert seen == [(1.0, 4.0), (2.0, 4.0)]

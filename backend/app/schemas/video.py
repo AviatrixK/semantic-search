@@ -21,6 +21,13 @@ class VideoOut(BaseModel):
     duration_sec: int | None
 
 
+class ChunkOut(BaseModel):
+    idx: int
+    start_sec: float
+    end_sec: float
+    text: str
+
+
 class SearchHit(BaseModel):
     video_id: str
     title: str

@@ -20,6 +20,11 @@ def vector_search(db: Session, query: str, k: int = 10, video_id: uuid.UUID | No
 # Week 10: add keyword_search() using chunks.tsv + reciprocal rank fusion -> hybrid_search().
 
 
+def list_chunks(db: Session, video_id: uuid.UUID) -> list[dict]:
+    rows = db.scalars(select(Chunk).where(Chunk.video_id == video_id).order_by(Chunk.idx)).all()
+    return [{"idx": c.idx, "start_sec": c.start_sec, "end_sec": c.end_sec, "text": c.text} for c in rows]
+
+
 def log_query(db: Session, user_id: str, query: str, mode: str):
     db.execute(text("INSERT INTO search_logs (id, user_id, query, mode) VALUES (:i, :u, :q, :m)"),
                {"i": uuid.uuid4(), "u": uuid.UUID(user_id), "q": query, "m": mode})

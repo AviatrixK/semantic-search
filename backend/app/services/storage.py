@@ -1,4 +1,6 @@
 """S3-compatible storage (SeaweedFS locally, S3/R2 in the demo)."""
+import json
+
 import boto3
 from botocore.client import Config
 from botocore.exceptions import ClientError
@@ -25,6 +27,11 @@ def ensure_bucket():
 
 def upload_fileobj(fileobj, key: str, content_type: str):
     s3.upload_fileobj(fileobj, settings.S3_BUCKET, key, ExtraArgs={"ContentType": content_type})
+
+
+def put_json(key: str, obj) -> None:
+    s3.put_object(Bucket=settings.S3_BUCKET, Key=key, ContentType="application/json",
+                  Body=json.dumps(obj, ensure_ascii=False).encode("utf-8"))
 
 
 def download_to(key: str, path: str):

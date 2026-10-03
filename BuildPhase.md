@@ -122,7 +122,7 @@ We are on Phase 2. Goal: upload → Celery → pgvector works end-to-end and rep
 6. Store the raw Whisper segments JSON in object storage (SeaweedFS locally) at `transcripts/{video_id}.json`.
 6b. If transcription yields 0 segments the worker must fail the job with a readable error ("No speech detected"), never mark it done with zero chunks. Test with sample/EduSphereDemonstration.mp4.
 7. Add a Celery retry with backoff for transient errors (S3/DB connection), but NOT for bad media.
-8. Write an integration test script `scripts/smoke_ingest.ps1` that logs in, uploads a sample, polls the job until done/failed, and prints chunk count.
+8. Write an integration test script `scripts/smoke_ingest.ps1` that logs in, uploads a sample, polls the job until done/failed, and prints chunk count. Also verify storage by fetching the pre-signed stream URL (SeaweedFS has no console); main test file is sample/purpose.mp4 (59 chunks locally), and the script must report the chunk count; support -ExpectNoSpeech for the silent sample.
 ```
 
 ### Concepts used

@@ -16,5 +16,6 @@ os.environ.update({
     "EMBED_DIM": "384",
     "CHUNK_SECONDS": "30",
     "CHUNK_OVERLAP": "5",
+    "MAX_UPLOAD_MB": "1",
     "GEMINI_API_KEY": "",
 })

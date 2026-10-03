@@ -45,6 +45,10 @@ and jump to timestamps; a Gemini tool-calling agent answers multi-step questions
 - **Silent video test case:** `sample/EduSphereDemonstration.mp4` has a fully silent audio track (-91 dB), so Whisper
   returns 0 segments. "No speech detected" must be a clear message in the CLI (Phase 1) and a failed job with a readable
   error in the worker (Phase 2), never an empty transcript or a "done" job with zero chunks. `sample/` is gitignored.
+- **Main test file:** `sample/purpose.mp4` (19.5 min, 59 chunks locally with defaults). `scripts/smoke_ingest.ps1` reports the
+  chunk count (`-ExpectedChunks 59` to compare). Storage is verified there by fetching the pre-signed stream URL (no console).
+- **Worker failure rules:** `NoSpeechError` -> job `failed` with the exact message "No speech detected", no retry. Bad media
+  (`MediaError`) fails without retry. Only transient S3/DB errors retry (exponential backoff, max 3).
 - **Dev machine:** Windows + PowerShell, Python 3.13 in `backend\.venv`, Docker Desktop (WSL 2), ffmpeg on PATH. The project
   path contains spaces: quote every path in commands and scripts. Internet is slow/unreliable: avoid forcing large
   re-downloads and ask before adding a heavy dependency.

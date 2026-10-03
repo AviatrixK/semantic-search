@@ -46,14 +46,23 @@ curl localhost:8000/api/jobs/<job_id> -H "Authorization: Bearer $TOKEN"        #
 curl "localhost:8000/api/search?q=how+do+interest+rates+work" -H "Authorization: Bearer $TOKEN"
 ```
 
+## Smoke test the pipeline (PowerShell, stack running)
+```powershell
+.\scripts\smoke_ingest.ps1 -Email admin@example.com -Password 'ChangeMe123!' -File "sample\purpose.mp4" -ExpectedChunks 59
+.\scripts\smoke_ingest.ps1 -Email admin@example.com -Password 'ChangeMe123!' -File "sample\EduSphereDemonstration.mp4" -ExpectNoSpeech
+```
+It uploads, checks storage by fetching the pre-signed stream URL, polls the job, and prints the chunk count.
+A silent video must end as `failed` with "No speech detected".
+
 ## Endpoints
 | Method | Path | Access |
 |---|---|---|
 | POST | /auth/register, /auth/login | public |
 | POST | /auth/refresh, /auth/logout | refresh cookie |
 | GET | /auth/me | logged in |
-| POST / DELETE | /api/videos | admin |
-| GET | /api/videos, /api/videos/{id}/stream, /api/jobs/{id}, /api/search | logged in |
+| POST / DELETE | /api/videos (upload takes `file` + optional `title`; mp4/webm/mov/mkv, max `MAX_UPLOAD_MB`) | admin |
+| POST | /api/videos/{id}/reprocess | admin |
+| GET | /api/videos, /api/videos/{id}/stream, /api/videos/{id}/transcript, /api/jobs/{id}, /api/search | logged in |
 
 ## Tests
 ```bash

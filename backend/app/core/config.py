@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     EMBED_DIM: int = 384
     CHUNK_SECONDS: float = 30.0
     CHUNK_OVERLAP: float = 5.0
+    MAX_UPLOAD_MB: int = 500
     GEMINI_API_KEY: str = ""
 
 
