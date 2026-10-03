@@ -45,7 +45,8 @@ CREATE TABLE chunks (
   end_sec     REAL NOT NULL,
   text        TEXT NOT NULL,
   embedding   VECTOR(384) NOT NULL,   -- must match EMBED_DIM
-  tsv         TSVECTOR GENERATED ALWAYS AS (to_tsvector('english', text)) STORED
+  tsv         TSVECTOR GENERATED ALWAYS AS (to_tsvector('english', text)) STORED,
+  CONSTRAINT chunks_video_id_idx_key UNIQUE (video_id, idx)
 );
 CREATE INDEX chunks_embedding_hnsw ON chunks USING hnsw (embedding vector_cosine_ops);
 CREATE INDEX chunks_tsv_gin ON chunks USING gin (tsv);

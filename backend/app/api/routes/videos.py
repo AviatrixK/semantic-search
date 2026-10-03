@@ -1,7 +1,9 @@
+import logging
 import uuid
 
 from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.api.deps import CurrentUser, current_user, require_admin
@@ -11,6 +13,7 @@ from app.models import Job, Video
 from app.schemas.video import ChunkOut, JobOut, UploadOut, VideoOut
 from app.services import retrieval, storage
 
+log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["videos"])
 ALLOWED = {"video/mp4", "video/webm", "video/quicktime", "video/x-matroska"}
 ALLOWED_EXT = {"mp4", "webm", "mov", "mkv"}
@@ -47,10 +50,19 @@ def upload_video(file: UploadFile, title: str | None = Form(None, max_length=200
 
     video = Video(id=vid, title=(title or "").strip() or name, storage_key=key, uploaded_by=uuid.UUID(admin.id))
     job = Job(video_id=vid)
-    db.add(video)
-    db.flush()      # insert the video row first so the job's foreign key is valid
-    db.add(job)
-    db.commit()
+    try:
+        db.add(video)
+        db.flush()      # insert the video row first so the job's foreign key is valid
+        db.add(job)
+        db.commit()
+    except SQLAlchemyError:
+        log.exception("upload: database write failed, removing orphaned object %s", key)
+        db.rollback()
+        try:
+            storage.delete(key)
+        except Exception:
+            log.exception("upload: could not remove orphaned object %s", key)
+        raise HTTPException(500, "Could not save the video. Please try again.")
 
     from app.workers.tasks import ingest_video  # local import keeps API startup light
     ingest_video.delay(str(vid), str(job.id))

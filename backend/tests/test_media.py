@@ -52,3 +52,21 @@ def test_duration_parsed():
     with patch("app.services.media.shutil.which", return_value="/bin/x"), \
          patch("app.services.media.subprocess.run", return_value=done(json.dumps({"format": {"duration": "12.9"}}))):
         assert media.duration_sec("in.mp4") == 12
+
+
+def test_failure_keeps_full_raw_output_but_short_message():
+    stderr = "A" * 2000 + "moov atom not found"
+    err = subprocess.CalledProcessError(1, ["ffprobe"], stderr=stderr)
+    with patch("app.services.media.shutil.which", return_value="/bin/x"), \
+         patch("app.services.media.subprocess.run", side_effect=err):
+        with pytest.raises(media.MediaError) as ei:
+            media.duration_sec("bad.mp4")
+    assert ei.value.raw == stderr and len(str(ei.value)) < 600
+    assert ei.value.user_message == "This file is not a valid video."
+
+
+def test_missing_duration_is_a_media_error():
+    with patch("app.services.media.shutil.which", return_value="/bin/x"), \
+         patch("app.services.media.subprocess.run", return_value=done(json.dumps({"format": {}}))):
+        with pytest.raises(media.MediaError):
+            media.duration_sec("in.mp4")

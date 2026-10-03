@@ -52,7 +52,20 @@ curl "localhost:8000/api/search?q=how+do+interest+rates+work" -H "Authorization:
 .\scripts\smoke_ingest.ps1 -Email admin@example.com -Password 'ChangeMe123!' -File "sample\EduSphereDemonstration.mp4" -ExpectNoSpeech
 ```
 It uploads, checks storage by fetching the pre-signed stream URL, polls the job, and prints the chunk count.
-A silent video must end as `failed` with "No speech detected".
+A silent video must end as `failed` with "No speech detected in this video." (`-ExpectFail` accepts any failed job, e.g. a renamed .txt).
+The pre-signed URL check is a warning, not a failure. Works on Windows PowerShell 5.1.
+
+## Inspect the database
+```powershell
+docker compose exec postgres psql -U svs -P pager=off -c "select count(*), min(start_sec), max(end_sec) from chunks;"
+```
+`-P pager=off` stops psql from opening a pager.
+
+Existing databases (created before the `chunks (video_id, idx)` unique constraint) need this once:
+```powershell
+docker compose exec postgres psql -U svs -P pager=off -c "ALTER TABLE chunks ADD CONSTRAINT chunks_video_id_idx_key UNIQUE (video_id, idx);"
+```
+If it fails with "could not create unique index", duplicates exist: reprocess the affected videos or delete the extra rows first.
 
 ## Endpoints
 | Method | Path | Access |
@@ -61,7 +74,7 @@ A silent video must end as `failed` with "No speech detected".
 | POST | /auth/refresh, /auth/logout | refresh cookie |
 | GET | /auth/me | logged in |
 | POST / DELETE | /api/videos (upload takes `file` + optional `title`; mp4/webm/mov/mkv, max `MAX_UPLOAD_MB`) | admin |
-| POST | /api/videos/{id}/reprocess | admin |
+| POST | /api/videos/{id}/reprocess (409 while a job is running) | admin |
 | GET | /api/videos, /api/videos/{id}/stream, /api/videos/{id}/transcript, /api/jobs/{id}, /api/search | logged in |
 
 ## Tests

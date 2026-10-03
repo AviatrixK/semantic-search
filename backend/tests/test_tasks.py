@@ -24,6 +24,7 @@ def env():
     video = SimpleNamespace(id=uuid.uuid4(), storage_key="raw/x.mp4", status="uploaded", duration_sec=None,
                             language=None)
     job = SimpleNamespace(stage="queued", progress=0, error=None)
+    job_id = uuid.uuid4()
     db = MagicMock()
     db.get.side_effect = lambda model, _id: {Video: video, Job: job}[model]
     with patch.object(tasks, "SessionLocal", return_value=db), \
@@ -33,12 +34,12 @@ def env():
          patch.object(media, "duration_sec", return_value=20), \
          patch.object(embedding, "embed_batch", side_effect=lambda t: [[0.0] * 384 for _ in t]) as embed, \
          patch.object(tasks.ingest_video, "retry", side_effect=Retried) as retry:
-        yield SimpleNamespace(db=db, video=video, job=job, download=download, put_json=put_json, embed=embed,
+        yield SimpleNamespace(db=db, video=video, job=job, job_id=job_id, download=download, put_json=put_json, embed=embed,
                               retry=retry)
 
 
 def run(env):
-    return tasks.ingest_video.run(str(env.video.id), str(uuid.uuid4()))
+    return tasks.ingest_video.run(str(env.video.id), str(env.job_id))
 
 
 def test_success_stores_transcript_and_chunks_idempotently(env):
@@ -58,7 +59,7 @@ def test_success_stores_transcript_and_chunks_idempotently(env):
 def test_no_speech_fails_job_with_readable_message_and_no_retry(env):
     with patch.object(transcription, "transcribe", side_effect=transcription.NoSpeechError("x")):
         run(env)  # handled failure: no exception escapes, so Celery does not retry
-    assert env.job.stage == "failed" and env.job.error == "No speech detected"
+    assert env.job.stage == "failed" and env.job.error == "No speech detected in this video."
     assert env.video.status == "failed"
     env.retry.assert_not_called()
     env.put_json.assert_not_called()
@@ -66,18 +67,68 @@ def test_no_speech_fails_job_with_readable_message_and_no_retry(env):
     env.db.add_all.assert_not_called()  # never "done" with zero chunks
 
 
-def test_bad_media_fails_without_retry(env):
-    with patch.object(media, "extract_audio", side_effect=media.NoAudioStreamError("clip.mp4 has no audio stream")):
-        run(env)
-    assert env.job.stage == "failed" and "no audio stream" in env.job.error
+RAW_FFPROBE = ("[mov,mp4,m4a,3gp,3g2,mj2 @ 0x7f3a2c001480] moov atom not found\n"
+               "/tmp/tmpab12cd/1c2d.mp4: Invalid data found when processing input")
+
+
+def assert_clean(error):
+    assert "/tmp" not in error and "\\" not in error and "0x" not in error and "ffprobe" not in error
+    assert "moov" not in error and ".mp4" not in error
+
+
+def test_corrupt_file_maps_to_short_message_and_is_not_retried(env, caplog):
+    err = media.MediaError(f"ffprobe failed (exit 1): {RAW_FFPROBE}", raw=RAW_FFPROBE)
+    with patch.object(media, "extract_audio", side_effect=err), caplog.at_level("WARNING"):
+        run(env)  # handled failure: nothing escapes, so Celery cannot retry it
+    assert env.job.stage == "failed" and env.job.error == "This file is not a valid video."
+    assert_clean(env.job.error)
+    assert env.video.status == "failed"
     env.retry.assert_not_called()
+    assert "moov atom not found" in caplog.text and str(env.job_id) in caplog.text  # raw output logged with job_id
+
+
+def test_no_audio_track_maps_to_short_message_and_is_not_retried(env):
+    with patch.object(media, "extract_audio",
+                      side_effect=media.NoAudioStreamError("/tmp/tmpab/x.mp4 has no audio stream")):
+        run(env)
+    assert env.job.stage == "failed" and env.job.error == "This video has no audio track."
+    assert_clean(env.job.error)
+    env.retry.assert_not_called()
+
+
+def test_missing_ffmpeg_does_not_leak_install_hint_or_retry(env):
+    with patch.object(media, "extract_audio", side_effect=media.ToolNotFoundError("'ffmpeg' was not found on PATH")):
+        run(env)
+    assert env.job.stage == "failed" and "PATH" not in env.job.error
+    env.retry.assert_not_called()
+
+
+def test_failed_job_logs_warning_with_ids_and_user_message(env, caplog):
+    with patch.object(transcription, "transcribe", side_effect=transcription.NoSpeechError("x")), \
+         caplog.at_level("WARNING"):
+        run(env)
+    rec = [r for r in caplog.records if r.levelname == "WARNING" and "failed (video" in r.getMessage()]
+    assert len(rec) == 1
+    msg = rec[0].getMessage()
+    assert str(env.job_id) in msg and str(env.video.id) in msg and "No speech detected in this video." in msg
+
+
+def test_user_message_mapping():
+    assert tasks.user_message(media.MediaError("raw /tmp/x")) == "This file is not a valid video."
+    assert tasks.user_message(media.NoAudioStreamError("raw")) == "This video has no audio track."
+    assert tasks.user_message(transcription.NoSpeechError("raw")) == "No speech detected in this video."
+    assert tasks.user_message(RuntimeError("boom at 0x7f00 in /app/x.py")) == tasks.GENERIC_FAILURE
+    assert tasks.user_message(EndpointConnectionError(endpoint_url="http://minio:9000")) == tasks.TRANSIENT_FAILURE
+    for m in (tasks.GENERIC_FAILURE, tasks.TRANSIENT_FAILURE):
+        assert_clean(m)
 
 
 def test_transient_error_retries_with_backoff(env):
     env.download.side_effect = EndpointConnectionError(endpoint_url="http://minio:9000")
     with pytest.raises(Retried):
         run(env)
-    assert env.job.stage == "queued" and "retrying (1/3)" in env.job.error
+    assert env.job.stage == "queued" and env.job.error == "Temporary problem, retrying (1/3)."
+    assert "minio" not in env.job.error
     assert env.retry.call_args.kwargs["countdown"] == 10
     assert env.video.status == "uploaded"  # not marked failed while retries remain
 
@@ -87,13 +138,14 @@ def test_transient_error_fails_when_retries_exhausted(env):
     with patch.object(tasks.ingest_video, "max_retries", 0), pytest.raises(EndpointConnectionError):
         run(env)
     assert env.job.stage == "failed" and env.video.status == "failed"
+    assert env.job.error == tasks.TRANSIENT_FAILURE
     env.retry.assert_not_called()
 
 
 def test_unexpected_error_fails_without_retry(env):
     with patch.object(transcription, "transcribe", side_effect=RuntimeError("boom")), pytest.raises(RuntimeError):
         run(env)
-    assert env.job.stage == "failed" and env.job.error == "boom"
+    assert env.job.stage == "failed" and env.job.error == tasks.GENERIC_FAILURE  # raw text only goes to the log
     env.retry.assert_not_called()
 
 

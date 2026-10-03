@@ -77,7 +77,7 @@ We are on Phase 1. Goal: make transcription and chunking robust and well-tested,
 2. Add a `--chunks` flag that also prints the chunk windows (start, end, first 80 chars).
 3. In chunking.py: handle empty/whitespace segments, a single segment longer than the window, and make size/overlap configurable via settings (CHUNK_SECONDS=30, CHUNK_OVERLAP=5 in config + .env.example).
 4. In media.py: raise a clear custom error if ffmpeg/ffprobe is not on PATH, and if the file has no audio stream.
-4b. In the CLI script, if transcription returns 0 segments print a clear "No speech detected" message (exit non-zero) instead of an empty transcript. Test case: sample/EduSphereDemonstration.mp4 (silent track).
+4b. In the CLI script, if transcription returns 0 segments print a clear "No speech detected in this video" message (exit non-zero) instead of an empty transcript. Test case: sample/EduSphereDemonstration.mp4 (silent track).
 5. Tests: extend test_chunking.py (no-overlap case, overlap never causes infinite loop, chunks are in time order, every segment appears in at least one chunk). Add test_media.py that mocks subprocess.
 6. Run pytest. Then explain chunking.window line by line in plain English in your summary.
 ```
@@ -120,7 +120,7 @@ We are on Phase 2. Goal: upload → Celery → pgvector works end-to-end and rep
 4. Add `POST /api/videos/{id}/reprocess` (admin) that re-enqueues ingestion (task is already idempotent — verify that).
 5. Add `GET /api/videos/{id}/transcript` returning ordered chunks (logged-in users).
 6. Store the raw Whisper segments JSON in object storage (SeaweedFS locally) at `transcripts/{video_id}.json`.
-6b. If transcription yields 0 segments the worker must fail the job with a readable error ("No speech detected"), never mark it done with zero chunks. Test with sample/EduSphereDemonstration.mp4.
+6b. If transcription yields 0 segments the worker must fail the job with a readable error ("No speech detected in this video."), never mark it done with zero chunks. Test with sample/EduSphereDemonstration.mp4.
 7. Add a Celery retry with backoff for transient errors (S3/DB connection), but NOT for bad media.
 8. Write an integration test script `scripts/smoke_ingest.ps1` that logs in, uploads a sample, polls the job until done/failed, and prints chunk count. Also verify storage by fetching the pre-signed stream URL (SeaweedFS has no console); main test file is sample/purpose.mp4 (59 chunks locally), and the script must report the chunk count; support -ExpectNoSpeech for the silent sample.
 ```
@@ -139,7 +139,7 @@ We are on Phase 2. Goal: upload → Celery → pgvector works end-to-end and rep
 ```powershell
 docker compose up --build
 .\scripts\smoke_ingest.ps1            # ends with stage=done and chunks > 0
-docker compose exec postgres psql -U svs -c "select count(*), min(start_sec), max(end_sec) from chunks;"
+docker compose exec postgres psql -U svs -P pager=off -c "select count(*), min(start_sec), max(end_sec) from chunks;"
 ```
 Check manually:
 - During processing, call `GET /api/jobs/{id}` repeatedly. `progress` should rise smoothly from 25 to 70.

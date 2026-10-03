@@ -3,6 +3,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.api.deps import CurrentUser, current_user
 from app.core.db import get_db
@@ -38,15 +39,41 @@ def post(client, name="clip.mp4", ctype="video/mp4", data=b"x" * 100, **form):
 def test_upload_ok_defaults_title_to_filename(client, db):
     r = post(client)
     assert r.status_code == 202
-    assert db.add_all.call_args[0][0][0].title == "clip.mp4"
+    assert db.add.call_args_list[0][0][0].title == "clip.mp4"
     key = client.upload.call_args[0][1]
     assert key.startswith("raw/") and key.endswith(".mp4")
     client.delay.assert_called_once()
 
 
+def test_upload_inserts_video_before_job(client, db):
+    order = []
+    db.add.side_effect = lambda obj: order.append(type(obj).__name__)
+    db.flush.side_effect = lambda: order.append("flush")
+    assert post(client).status_code == 202
+    assert order == ["Video", "flush", "Job"]  # job FK needs the video row to exist first
+
+
+def test_upload_db_failure_removes_stored_file_and_returns_readable_error(client, db):
+    db.commit.side_effect = SQLAlchemyError("connection lost")
+    with patch.object(storage, "delete") as delete:
+        r = post(client)
+    assert r.status_code == 500 and r.json() == {"detail": "Could not save the video. Please try again."}
+    uploaded_key = client.upload.call_args[0][1]
+    delete.assert_called_once_with(uploaded_key)
+    db.rollback.assert_called()
+    client.delay.assert_not_called()
+
+
+def test_upload_db_failure_still_readable_if_cleanup_fails(client, db):
+    db.flush.side_effect = SQLAlchemyError("fk violation")
+    with patch.object(storage, "delete", side_effect=RuntimeError("storage down")):
+        r = post(client)
+    assert r.status_code == 500 and "Could not save" in r.json()["detail"]
+
+
 def test_upload_uses_title_field(client, db):
     assert post(client, title="  My talk  ").status_code == 202
-    assert db.add_all.call_args[0][0][0].title == "My talk"
+    assert db.add.call_args_list[0][0][0].title == "My talk"
 
 
 @pytest.mark.parametrize("name,ctype", [("notes.txt", "text/plain"), ("clip.exe", "video/mp4"),

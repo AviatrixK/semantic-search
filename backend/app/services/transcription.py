@@ -11,6 +11,7 @@ SAMPLE_RATE = 16000
 
 class NoSpeechError(Exception):
     """Transcription produced no text (silent or music-only audio)."""
+    user_message = "No speech detected in this video."
 
 
 @lru_cache

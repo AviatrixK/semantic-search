@@ -43,12 +43,23 @@ and jump to timestamps; a Gemini tool-calling agent answers multi-step questions
   16-bit WAV with stdlib `wave` into a float32 numpy array and `transcribe()` passes that array. Always pass an array.
   Do NOT pin `av` in requirements.txt. `faster-whisper` stays `>=1.1,<2`.
 - **Silent video test case:** `sample/EduSphereDemonstration.mp4` has a fully silent audio track (-91 dB), so Whisper
-  returns 0 segments. "No speech detected" must be a clear message in the CLI (Phase 1) and a failed job with a readable
+  returns 0 segments. "No speech detected in this video" must be a clear message in the CLI (Phase 1) and a failed job with a readable
   error in the worker (Phase 2), never an empty transcript or a "done" job with zero chunks. `sample/` is gitignored.
 - **Main test file:** `sample/purpose.mp4` (19.5 min, 59 chunks locally with defaults). `scripts/smoke_ingest.ps1` reports the
   chunk count (`-ExpectedChunks 59` to compare). Storage is verified there by fetching the pre-signed stream URL (no console).
-- **Worker failure rules:** `NoSpeechError` -> job `failed` with the exact message "No speech detected", no retry. Bad media
-  (`MediaError`) fails without retry. Only transient S3/DB errors retry (exponential backoff, max 3).
+- **Worker failure rules:** never retry bad input. `jobs.error` holds only short user-facing text (never paths, tool output or
+  memory addresses; the raw output goes to the worker log with the job_id):
+  corrupt/unreadable file -> "This file is not a valid video."; no audio stream -> "This video has no audio track.";
+  `NoSpeechError` -> "No speech detected in this video.". Each exception class carries its own `user_message`. Unknown errors
+  -> a generic message + `log.exception`. Only transient S3/DB errors retry (exponential backoff, max 3). Every failed job logs a
+  WARNING with job_id, video_id and the user-facing message.
+- **Upload route:** insert the video, `db.flush()`, then add the job (the job FK needs the video row). If the DB write fails after
+  the file reached storage, delete the stored object and return a readable 500 body.
+- **chunks has `UNIQUE (video_id, idx)`** (constraint `chunks_video_id_idx_key`). Reprocess returns 409 while a job for that video is running.
+- **Verified baseline:** a 28-minute video -> 78 chunks in about 150 s on CPU; reprocess keeps the count at 78.
+- **psql:** always pass `-P pager=off` (e.g. `docker compose exec postgres psql -U svs -P pager=off -c "..."`).
+- **Smoke script** must work on Windows PowerShell 5.1: no `Invoke-WebRequest -Headers @{Range=...}` (use `curl.exe -r`), no
+  PS7-only syntax.
 - **Dev machine:** Windows + PowerShell, Python 3.13 in `backend\.venv`, Docker Desktop (WSL 2), ffmpeg on PATH. The project
   path contains spaces: quote every path in commands and scripts. Internet is slow/unreliable: avoid forcing large
   re-downloads and ask before adding a heavy dependency.

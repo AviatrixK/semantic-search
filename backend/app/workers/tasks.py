@@ -1,4 +1,3 @@
-import logging
 import os
 import tempfile
 import time
@@ -7,16 +6,20 @@ import uuid
 from botocore.exceptions import BotoCoreError, ClientError
 from sqlalchemy.exc import OperationalError
 
+from celery.utils.log import get_task_logger
+
 from app.core.db import SessionLocal
 from app.models import Chunk, Job, Video
 from app.services import chunking, embedding, media, storage, transcription
 from app.workers.celery_app import celery
 
-log = logging.getLogger(__name__)
+log = get_task_logger(__name__)
 
 MAX_RETRIES = 3
 PROGRESS_INTERVAL_SEC = 3.0
-NO_SPEECH_MESSAGE = "No speech detected"
+# User-facing text for jobs.error. Never put paths, tool output or exception reprs here: those go to the log.
+GENERIC_FAILURE = "Processing failed unexpectedly. Please try again or contact an administrator."
+TRANSIENT_FAILURE = "Processing failed because storage or the database was unreachable. Please try again."
 
 
 def _set(db, job_id, stage, progress, error=None):
@@ -32,6 +35,14 @@ def is_transient(exc: BaseException) -> bool:
     if isinstance(exc, ClientError):  # 404 NoSuchKey etc. are permanent; only 5xx is worth retrying
         return exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode", 0) >= 500
     return isinstance(exc, (BotoCoreError, OperationalError, ConnectionError, TimeoutError))
+
+
+def user_message(exc: BaseException) -> str:
+    """Short, path-free text for jobs.error. Known errors carry their own `user_message`."""
+    msg = getattr(exc, "user_message", None)
+    if msg:
+        return msg
+    return TRANSIENT_FAILURE if is_transient(exc) else GENERIC_FAILURE
 
 
 def retry_delay(retries: int) -> int:
@@ -55,6 +66,7 @@ def progress_reporter(db, job_id, interval=PROGRESS_INTERVAL_SEC, clock=time.mon
 
 
 def _fail(db, video_id, job_id, message):
+    log.warning("job %s failed (video %s): %s", job_id, video_id, message)
     db.rollback()
     _set(db, job_id, "failed", 0, message[:1000])
     video = db.get(Video, uuid.UUID(video_id))
@@ -85,7 +97,7 @@ def _ingest(db, video_id, job_id):
     _set(db, job_id, "embedding", 70)
     spans = chunking.window(segments)
     if not spans:
-        raise transcription.NoSpeechError(NO_SPEECH_MESSAGE)
+        raise transcription.NoSpeechError("no chunks produced from transcript")
     vectors = embedding.embed_batch([s.text for s in spans])
     # Idempotent: delete + insert + status flip all commit together in the final _set, so a retry or a
     # reprocess can never leave duplicate or half-written chunks.
@@ -101,17 +113,21 @@ def ingest_video(self, video_id: str, job_id: str):
     db = SessionLocal()
     try:
         _ingest(db, video_id, job_id)
-    except transcription.NoSpeechError:
-        _fail(db, video_id, job_id, NO_SPEECH_MESSAGE)  # permanent: no retry
-    except media.MediaError as exc:
-        _fail(db, video_id, job_id, str(exc))  # permanent: bad or audio-less media, no retry
+    except (transcription.NoSpeechError, media.MediaError) as exc:
+        # Permanent (silent audio, corrupt file, no audio track): fail the job, never retry.
+        # The raw tool output stays in the log; only the short user_message reaches jobs.error.
+        log.warning("job %s: %s: %s", job_id, type(exc).__name__, getattr(exc, "raw", exc))
+        _fail(db, video_id, job_id, exc.user_message)
     except Exception as exc:
+        log.exception("job %s: %s", job_id, type(exc).__name__)
         if is_transient(exc) and self.request.retries < self.max_retries:
             db.rollback()
             n = self.request.retries + 1
-            _set(db, job_id, "queued", 0, f"Temporary error, retrying ({n}/{self.max_retries}): {exc}"[:1000])
+            log.warning("job %s: transient error, retry %s/%s in %ss", job_id, n, self.max_retries,
+                        retry_delay(self.request.retries))
+            _set(db, job_id, "queued", 0, f"Temporary problem, retrying ({n}/{self.max_retries}).")
             raise self.retry(exc=exc, countdown=retry_delay(self.request.retries))
-        _fail(db, video_id, job_id, str(exc))
+        _fail(db, video_id, job_id, user_message(exc))
         raise
     finally:
         db.close()
