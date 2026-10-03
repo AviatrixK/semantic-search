@@ -109,6 +109,21 @@ and jump to timestamps; a Gemini tool-calling agent answers multi-step questions
   .mkv and the backend answers 415. Client-side size/type checks use `VITE_MAX_UPLOAD_MB` (default 500): keep it equal to the backend's
   `MAX_UPLOAD_MB`. `Video.status` "uploaded" means stored and waiting for / in processing (UI badge "Processing"); the table refreshes
   itself every 5 s while any video is processing. `GET /api/videos` returns `created_at`.
+- **Search UX (`/`), Library (`/library`), Watch (`/watch/:videoId?t=`).** Search is a debounced (400 ms), cancellable combobox:
+  `lib/searcher.ts` (one request per pause, newer queries abort older ones, unchanged queries are not repeated, queries < 2 chars never
+  hit the server); focus stays in the box, arrows move `aria-activedescendant`, Enter plays the selected result or searches. The query
+  lives in `?q=`. A 429 shows a countdown and retries once automatically. `VideoPlayer` takes a `SeekRequest {videoId, t, play, nonce}`:
+  presigned URLs come from `api/streams.ts` (cached per video for 50 min, below the backend's 1 h signature; an expired one is refetched
+  once on a media error), another moment of the loaded video only seeks, blocked autoplay shows "Press play". `?t=` accepts 123, 2:03, 1m30s.
+- **The transcript must not show chunk overlap.** `/transcript` returns ~30 s chunks that overlap by 4-11 s (the overlap is whole segments,
+  so a chunk starts with exactly the text its predecessor ends with). `lib/transcript.ts` trims that repeated start (only when the chunks
+  also overlap in time), splits into sentences and interpolates each sentence's start from its position in the text (accurate to a second
+  or two). Never render raw chunks as transcript lines. Real chunk text is the test fixture.
+- **CSS gotcha:** `position: sticky` on a grid item only moves inside its own grid row. For a stacked (mobile) layout use `display: block`,
+  not a one-column grid, or the "sticky" element never sticks.
+- **Verification that worked:** besides `npm test`, a headless-Edge run over the DevTools protocol (Node's built-in WebSocket, no new
+  dependency) against a throwaway Postgres/Redis/SeaweedFS with the real video and real chunks caught real bugs that unit tests could not.
+  Use a different port than 5173 (the developer may have `npm run dev` running) and never kill processes you did not start.
 - **Dev machine:** Windows + PowerShell, Python 3.13 in `backend\.venv`, Docker Desktop (WSL 2), ffmpeg on PATH. The project
   path contains spaces: quote every path in commands and scripts. Internet is slow/unreliable: avoid forcing large
   re-downloads and ask before adding a heavy dependency.

@@ -58,6 +58,14 @@ refresh-token cookie is same-origin. Pages: Log in, Register, Home (placeholder)
 `npm run typecheck`, `npm run build`, `npm test` (client logic: refresh single-flight, 429 handling, two-tab safety, upload queue,
 job polling, formatting).
 
+**Search** (`/`): type and results appear after a short pause (or press Enter). Each result shows the video, the time range, the
+matching sentence in bold and a subtle similarity bar. Click a result, or use the arrow keys and Enter, to play the video at that moment
+in the sticky player (it stacks above the results on a phone). The query is kept in the address (`/?q=...`), so reload, back and sharing
+work. **Library** (`/library`) lists the ready videos. **Watch** (`/watch/<id>?t=123`) plays a video with its full transcript: click a
+line to jump there, the line being spoken is highlighted and followed (scroll by hand to pause that, "Follow playback" resumes it). `t`
+accepts seconds, `2:03` or `1m30s`, and "Copy link to this moment" builds such a link. The browser plays the video straight from storage
+through a presigned URL, so `S3_PUBLIC_ENDPOINT` must be reachable from the browser (it is `http://localhost:9000` by default).
+
 **Admin page** (`/admin`, admins only): drag-and-drop or pick several videos, edit titles, upload them one after another with a progress
 bar, and watch each one's processing live (stage and progress, polled every 2 seconds, error text on failure). The library table shows
 title, duration (mm:ss), status, created date, and Reprocess / Delete (with confirmation). Friendly messages for 413 (too large),
