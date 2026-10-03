@@ -10,12 +10,12 @@ and jump to the exact timestamp. An LLM agent (weeks 7–9) plans multi-step sea
 | worker | — | Celery — ffmpeg → Whisper → chunk → embed → store |
 | postgres | 5432 | Postgres 16 + pgvector (schema in `db/init.sql`) |
 | redis | 6379 | Celery broker |
-| minio | 9000 / 9001 | S3-compatible video storage (console: minioadmin/minioadmin) |
+| minio | 9000 | S3-compatible video storage. Runs **SeaweedFS** (MinIO's public images were pulled); service name kept as `minio`. No web console. |
 
 ## Week 1 — transcribe one video (no Docker needed)
 ```bash
-pip install faster-whisper      # plus ffmpeg on your PATH
-python scripts/transcribe.py my_video.mp4
+pip install faster-whisper pydantic-settings numpy      # plus ffmpeg on your PATH
+python scripts/transcribe.py "path\to\my_video.mp4" --chunks
 ```
 
 ## Run the full stack
@@ -25,6 +25,15 @@ docker compose up --build
 docker compose exec api python -m app.scripts.create_admin admin@example.com 'ChangeMe123!'
 ```
 First upload is slow: the worker downloads the Whisper and embedding models once.
+The backend image installs CPU-only PyTorch (the default Linux wheel pulls ~3 GB of CUDA libraries) and uses a
+`backend/.dockerignore` to keep the build context small. SeaweedFS logs a few harmless errors at startup
+("Not current leader", "Failed to load IAM configuration").
+
+> The project path contains spaces. In PowerShell always quote paths: `cd "C:\IMP\Career\WEB DEVELOPMENT\Semantic Video Search"`.
+
+## Notes
+- Transcription passes faster-whisper a numpy array (read from the ffmpeg WAV), never a file path, to avoid a PyAV incompatibility. Do not pin `av`.
+- `sample/` is gitignored. `sample/EduSphereDemonstration.mp4` has a silent audio track and is the "no speech" test case.
 
 ## Try it (Swagger at http://localhost:8000/docs, or curl)
 ```bash

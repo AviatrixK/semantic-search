@@ -7,13 +7,13 @@ How to use this file:
 4. Read the **Concepts** section and make sure you can explain each item in your own words (viva prep).
 5. Commit with the given message: `git add -A; git commit -m "<message>"`.
 
-Start of every session tip: type `Read docs/BUILD_PHASES.md and CLAUDE.md. We are on Phase N.` before the prompt.
+Start of every session tip: type `Read BuildPhase.md and CLAUDE.md. We are on Phase N.` before the prompt.
 
 | # | Phase | Est. time |
 |---|---|---|
 | 0 | Repo setup & scaffold verification | 0.5 day |
 | 1 | Transcription & chunking hardening | 1–2 days |
-| 2 | Ingestion pipeline end-to-end (Celery + MinIO + pgvector) | 2 days |
+| 2 | Ingestion pipeline end-to-end (Celery + SeaweedFS + pgvector) | 2 days |
 | 3 | Auth hardening + integration tests | 2 days |
 | 4 | Search API improvements | 1 day |
 | 5 | Frontend foundation + auth | 2–3 days |
@@ -46,7 +46,7 @@ Do not add new features.
 ### Concepts used
 - **Virtual environments** — an isolated Python install per project so dependency versions don't collide.
 - **Prebuilt wheels vs. source builds** — pip installs a compiled "wheel" if one exists for your OS and Python version. Otherwise it compiles from source, which needs a C/C++ toolchain. That's why `av` failed.
-- **Docker Compose** — describes multiple containers (api, worker, postgres, redis, minio) in one file. They talk to each other over an internal network using service names as hostnames.
+- **Docker Compose** — describes multiple containers (api, worker, postgres, redis, minio) in one file. The `minio` service now runs SeaweedFS (MinIO's public images were removed) but keeps its name. They talk to each other over an internal network using service names as hostnames.
 - **Environment config (12-factor)** — settings come from environment variables (`.env`), not code, so the same code runs in dev and prod.
 - **`.gitignore` and secrets hygiene** — `.env` must never be committed.
 
@@ -58,7 +58,7 @@ docker compose up --build                                # 5 containers start, n
 # new terminal:
 curl http://localhost:8000/health                        # {"ok":true}
 ```
-Open http://localhost:8000/docs (Swagger loads) and http://localhost:9001 (MinIO console; log in with minioadmin/minioadmin and check that the `videos` bucket exists).
+Open http://localhost:8000/docs (Swagger loads) . SeaweedFS has no web console; the API creates the `videos` bucket on startup, so check the api logs for errors. SeaweedFS startup logs ("Not current leader", "Failed to load IAM configuration") are harmless. The backend image uses CPU-only torch and `backend/.dockerignore`.
 
 ### Commit
 ```
@@ -77,6 +77,7 @@ We are on Phase 1. Goal: make transcription and chunking robust and well-tested,
 2. Add a `--chunks` flag that also prints the chunk windows (start, end, first 80 chars).
 3. In chunking.py: handle empty/whitespace segments, a single segment longer than the window, and make size/overlap configurable via settings (CHUNK_SECONDS=30, CHUNK_OVERLAP=5 in config + .env.example).
 4. In media.py: raise a clear custom error if ffmpeg/ffprobe is not on PATH, and if the file has no audio stream.
+4b. In the CLI script, if transcription returns 0 segments print a clear "No speech detected" message (exit non-zero) instead of an empty transcript. Test case: sample/EduSphereDemonstration.mp4 (silent track).
 5. Tests: extend test_chunking.py (no-overlap case, overlap never causes infinite loop, chunks are in time order, every segment appears in at least one chunk). Add test_media.py that mocks subprocess.
 6. Run pytest. Then explain chunking.window line by line in plain English in your summary.
 ```
@@ -118,7 +119,8 @@ We are on Phase 2. Goal: upload → Celery → pgvector works end-to-end and rep
 3. Add a `title` form field to the upload (default to filename).
 4. Add `POST /api/videos/{id}/reprocess` (admin) that re-enqueues ingestion (task is already idempotent — verify that).
 5. Add `GET /api/videos/{id}/transcript` returning ordered chunks (logged-in users).
-6. Store the raw Whisper segments JSON in MinIO at `transcripts/{video_id}.json`.
+6. Store the raw Whisper segments JSON in object storage (SeaweedFS locally) at `transcripts/{video_id}.json`.
+6b. If transcription yields 0 segments the worker must fail the job with a readable error ("No speech detected"), never mark it done with zero chunks. Test with sample/EduSphereDemonstration.mp4.
 7. Add a Celery retry with backoff for transient errors (S3/DB connection), but NOT for bad media.
 8. Write an integration test script `scripts/smoke_ingest.ps1` that logs in, uploads a sample, polls the job until done/failed, and prints chunk count.
 ```
@@ -129,7 +131,7 @@ We are on Phase 2. Goal: upload → Celery → pgvector works end-to-end and rep
 - **Idempotency** — re-running the task for the same video deletes old chunks first, so retries don't create duplicates.
 - **Retries with exponential backoff** — retry temporary failures (network), fail fast on permanent ones (corrupt file).
 - **`acks_late`** — a task is only removed from the queue after it finishes, so a worker crash doesn't lose it.
-- **Object storage** — big binary files go in S3/MinIO; the DB only stores the key.
+- **Object storage** — big binary files go in S3-compatible storage (SeaweedFS locally); the DB only stores the key.
 - **Embeddings** — each chunk becomes a 384-dimension vector. `normalize_embeddings=True` makes cosine similarity equal to dot product.
 - **HNSW index** — an approximate nearest-neighbour graph so vector search stays fast as chunks grow.
 
@@ -324,7 +326,7 @@ We are on Phase 7. Goal: the core user experience — search and jump to the mom
 ### Concepts used
 - **Debouncing** — wait until the user stops typing before calling the API.
 - **HTML5 video API** — `currentTime`, `play()`, `loadedmetadata` and `timeupdate` events. Media fragments (`#t=`) are another option.
-- **Pre-signed URLs** — temporary signed links that let the browser stream directly from S3/MinIO without making the bucket public.
+- **Pre-signed URLs** — temporary signed links that let the browser stream directly from S3/SeaweedFS without making the bucket public.
 - **HTTP range requests** — why seeking works without downloading the whole file.
 - **Synchronized transcript** — mapping playback time to the active chunk.
 - **Accessibility and keyboard navigation** — focus management and ARIA roles.
@@ -543,7 +545,7 @@ feat(eval): retrieval and answer evaluation harness with recall@k, mrr and llm-a
 ```
 We are on Phase 13. Goal: demo-ready and deployable.
 
-1. Production Dockerfiles: multi-stage frontend build served by nginx; api with gunicorn+uvicorn workers; worker image preloads models at build time (download Whisper base + MiniLM).
+1. Production Dockerfiles: multi-stage frontend build served by nginx; api with gunicorn+uvicorn workers; worker image preloads models at build time (download Whisper base + MiniLM). Keep the CPU-only torch layer (https://download.pytorch.org/whl/cpu, before requirements.txt), pip cache mounts, and a .dockerignore in every Dockerfile.
 2. docker-compose.prod.yml with healthchecks, restart policies, no source mounts, COOKIE_SECURE=true.
 3. Structured JSON logging with request_id, user_id, job_id; global exception handler returning safe error bodies.
 4. Deployment guide in docs/DEPLOY.md for: Neon/Supabase Postgres (pgvector), Upstash Redis, Cloudflare R2 or S3, Render/Railway for api+worker, Vercel for frontend. List every env var.

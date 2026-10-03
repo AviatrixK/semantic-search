@@ -1,9 +1,7 @@
-   @"
-   .venv
-   __pycache__
-   *.pyc
-   .pytest_cache
-   *.wav
-   *.mp4
-   *.transcript.json
-   "@ | Set-Content backend\.dockerignore
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+*.wav
+*.mp4
+*.transcript.json

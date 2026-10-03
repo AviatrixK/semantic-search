@@ -1,4 +1,4 @@
-"""S3-compatible storage (MinIO locally, S3 in the demo)."""
+"""S3-compatible storage (SeaweedFS locally, S3/R2 in the demo)."""
 import boto3
 from botocore.client import Config
 from botocore.exceptions import ClientError
