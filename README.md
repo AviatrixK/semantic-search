@@ -77,6 +77,11 @@ Create an admin to see the Admin link: `docker compose exec api python -m app.sc
 `GET /api/search?q=...` (login required, 30/min per user). Optional: `k` (1-50, default 10), `video_id`, `uploaded_after=YYYY-MM-DD`
 (videos uploaded on/after that day, UTC), `highlight=false`. Hits below `MIN_SCORE` (default 0.25) are dropped, overlapping chunks of
 the same video are collapsed to the best one, and each hit carries `highlight`, the sentence of the chunk that best matches the query.
+`mode=hybrid` (default) | `vector` | `keyword`: hybrid runs semantic and full-text search (top 30 each, `HYBRID_CANDIDATES`) and merges them
+with Reciprocal Rank Fusion (`score = sum 1/(60 + rank)`, `RRF_K`), so exact names/acronyms and paraphrases both work. `score` stays the cosine
+similarity; hybrid hits also carry `rrf` and `found_by`. Keyword mode uses `websearch_to_tsquery` (plain words are ANDed, `"phrases"`, `OR`, `-exclude`
+work) and needs no model. Optional cross-encoder rerank of the top 20: `RERANK=true` in `.env` (downloads `cross-encoder/ms-marco-MiniLM-L-6-v2`
+on first use, adds latency; falls back to the fused order if it cannot load). The agent's `search_transcripts` tool uses hybrid.
 The `X-Search-Ms` response header reports server time. Query embeddings are cached in Redis for a day, so a repeated query skips the model.
 
 Sentence vectors for highlights are computed at ingest. For videos ingested before Phase 4, one-time (existing database):
@@ -87,6 +92,11 @@ docker compose exec api python -m app.scripts.backfill_sentences
 ```
 Until the backfill runs, highlights still work but are computed per request (about half a second).
 Re-run the backfill whenever the sentence splitter changes: it rebuilds stale rows as well as filling in missing ones.
+
+## Evaluation
+`backend/eval/` measures search and answer quality against a hand-labelled gold set (Recall@1/@5, MRR, latency; LLM-judged groundedness and
+relevance, citation precision). See `backend/eval/README.md`: `docker compose exec api python eval/add_query.py`, then `eval/run_eval.py` and
+`eval/run_answer_eval.py` (the latter makes real Gemini calls).
 
 ## Ask (answers with citations)
 `POST /api/ask {"question": "..."}` retrieves the 8 best transcript chunks, asks Gemini to answer **only** from them and to cite `[n]`, and

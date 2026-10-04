@@ -64,8 +64,26 @@ export interface Citation {
   end_sec: number
 }
 
+/** One tool call of the research agent, as returned with a finished answer. */
+export interface TraceStepOut {
+  step: number
+  index: number
+  tool: string
+  args: Record<string, unknown>
+  label: string
+  summary: string
+  latency_ms: number
+  error: boolean
+}
+
 export interface AskOut {
   answer: string
   citations: Citation[]
-  mode: 'rag'
+  /** What was asked for: rag, agent, or auto (let the server choose). */
+  mode: 'rag' | 'agent' | 'auto'
+  /** What was used: a keyword search, one RAG answer, or the agent. */
+  route: 'search' | 'rag' | 'agent'
+  route_reason: string
+  trace: TraceStepOut[]
+  usage: { llm_calls: number; tokens: number }
 }

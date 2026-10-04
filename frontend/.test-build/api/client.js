@@ -1,3 +1,4 @@
+import { createSseParser } from '../lib/sse.js';
 import { ApiError, NetworkError, detailMessage, parseRetryAfter } from './errors.js';
 const AUTH_PATHS = ['/auth/login', '/auth/register', '/auth/refresh', '/auth/logout'];
 const noLock = (fn) => fn();
@@ -169,6 +170,29 @@ export function createApiClient(options = {}) {
         },
         async upload(path, form, o = {}) {
             return parse(await withAuthRetry(path, (t) => sendXhr(path, form, t, o)));
+        },
+        async stream(path, o) {
+            const res = await withAuthRetry(path, (t) => send(path, { headers: { Accept: 'text/event-stream' }, signal: o.signal }, t));
+            if (!res.body)
+                throw new NetworkError('This browser cannot read streamed responses');
+            const reader = res.body.getReader();
+            const decoder = new TextDecoder(); // stream: true below, so a character split across chunks is not corrupted
+            const parser = createSseParser(o.onEvent);
+            try {
+                for (;;) {
+                    const { done, value } = await reader.read();
+                    if (done)
+                        break;
+                    parser.push(decoder.decode(value, { stream: true }));
+                }
+                parser.push(decoder.decode());
+                parser.end();
+            }
+            catch (e) {
+                if (e instanceof DOMException && e.name === 'AbortError')
+                    throw e;
+                throw new NetworkError('The connection was interrupted');
+            }
         },
     };
 }

@@ -2,11 +2,13 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FormEvent, KeyboardEvent } from 'react'
 import { Link } from 'react-router-dom'
 import type { Citation } from '../api'
+import AgentTrace from '../components/AgentTrace'
 import AnswerText, { citationKey } from '../components/AnswerText'
 import VideoPlayer from '../components/VideoPlayer'
 import type { SeekRequest } from '../components/VideoPlayer'
 import { useChat } from '../hooks/useChat'
 import { clock } from '../lib/answerText'
+import { routeLabel } from '../lib/trace'
 import { watchPath } from '../lib/timeParam'
 import styles from './Ask.module.css'
 
@@ -98,10 +100,16 @@ export default function Ask() {
               ) : (
                 <div key={m.id} className={`${styles.bubble} ${styles.assistant}`} aria-busy={m.status === 'pending'}>
                   <span className="sr-only">Answer: </span>
+                  {m.route && (
+                    <span className={styles.route} title={`${routeLabel(m.route)?.hint}${m.routeReason ? ` (${m.routeReason})` : ''}`}>
+                      {routeLabel(m.route)?.label}
+                    </span>
+                  )}
+                  {m.status === 'pending' && <AgentTrace steps={m.trace} running />}
                   {m.status === 'pending' && (
                     <div className={styles.thinking}>
                       <span className={styles.dots} aria-hidden="true"><i /><i /><i /></span>
-                      <span>Searching the videos and writing an answer…</span>
+                      <span>{m.route === 'agent' ? 'Researching the videos…' : 'Searching the videos and writing an answer…'}</span>
                       <button type="button" className="btn btn-secondary" onClick={() => cancel(m.id)}>Cancel</button>
                     </div>
                   )}
@@ -114,6 +122,7 @@ export default function Ask() {
                       </button>
                     </div>
                   )}
+                  {m.status === 'error' && m.trace.length > 0 && <AgentTrace steps={m.trace} running={false} />}
                   {m.status === 'done' && (
                     <>
                       <AnswerText text={m.text} citations={m.citations} selectedKey={selected ? citationKey(selected) : null} onCite={play} />
@@ -133,6 +142,12 @@ export default function Ask() {
                             </li>
                           ))}
                         </ul>
+                      )}
+                      <AgentTrace steps={m.trace} running={false} />
+                      {m.usage && m.usage.llmCalls > 0 && (
+                        <p className={styles.meta}>
+                          {m.usage.llmCalls} AI call{m.usage.llmCalls === 1 ? '' : 's'} · {m.usage.tokens.toLocaleString()} tokens
+                        </p>
                       )}
                     </>
                   )}

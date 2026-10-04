@@ -17,16 +17,49 @@ def _overlaps(a: dict, b: dict) -> bool:
     return a["video_id"] == b["video_id"] and a["start_sec"] < b["end_sec"] and b["start_sec"] < a["end_sec"]
 
 
-def dedupe_overlapping(hits: list[dict]) -> list[dict]:
-    """Greedy, best score first: keep a hit unless it overlaps in time with a better hit that was already kept
-    (same video only). Neighbouring chunks overlap by several seconds, so they often match the same query; this
-    keeps the best one. Works for chains too: with A(0-30) B(25-55) C(50-80), if B scores highest only B survives;
-    if A is best, A and C survive (C does not overlap A). Returns hits ordered by score, best first."""
+def dedupe_overlapping(hits: list[dict], key: str = "score") -> list[dict]:
+    """Greedy, best `key` first (default: score): keep a hit unless it overlaps in time with a better hit that was
+    already kept (same video only). Neighbouring chunks overlap by several seconds, so they often match the same
+    query; this keeps the best one. Works for chains too: with A(0-30) B(25-55) C(50-80), if B scores highest only B
+    survives; if A is best, A and C survive (C does not overlap A). Returns hits ordered by `key`, best first."""
     kept: list[dict] = []
-    for hit in sorted(hits, key=lambda h: (-h["score"], h["video_id"], h["start_sec"])):
+    for hit in sorted(hits, key=lambda h: (-h[key], h["video_id"], h["start_sec"])):
         if not any(_overlaps(hit, k) for k in kept):
             kept.append(hit)
     return kept
+
+
+def rrf_merge(rankings: dict[str, list[dict]], k: int = 60, id_key: str = "chunk_id") -> list[dict]:
+    """Reciprocal Rank Fusion. `rankings` maps a source name ("vector", "keyword") to its hits, best first.
+    Every hit gets rrf = sum over the sources that returned it of 1 / (k + rank), rank starting at 1, so a chunk both
+    lists agree on beats a chunk only one list loves, and the raw scores (cosine vs ts_rank) never need comparing.
+    Returns new dicts (inputs untouched) best first, with `rrf` and `found_by` (source names, in `rankings` order) added.
+    Fields of the first source that returned a hit win. Ties: the better best-rank, then source order, then input order."""
+    merged: dict = {}
+    for source_order, (source, hits) in enumerate(rankings.items()):
+        for rank, hit in enumerate(hits, start=1):
+            entry = merged.get(hit[id_key])
+            if entry is None:
+                entry = merged[hit[id_key]] = {"hit": dict(hit), "rrf": 0.0, "found_by": [], "best": (rank, source_order, len(merged))}
+            elif source in entry["found_by"]:
+                continue  # a source listing the same chunk twice only counts once
+            else:
+                entry["best"] = min(entry["best"], (rank, source_order, entry["best"][2]))
+                for field, value in hit.items():
+                    entry["hit"].setdefault(field, value)
+            entry["rrf"] += 1.0 / (k + rank)
+            entry["found_by"].append(source)
+    ordered = sorted(merged.values(), key=lambda e: (-e["rrf"], e["best"]))
+    return [{**e["hit"], "rrf": e["rrf"], "found_by": e["found_by"]} for e in ordered]
+
+
+def rerank_order(hits: list[dict], scores: list[float]) -> list[dict]:
+    """Reorders `hits` by cross-encoder `scores` (best first; ties keep the incoming order) and records each as
+    `rerank_score`. Pure so it is testable without the model."""
+    if len(hits) != len(scores):
+        raise ValueError("one score per hit is required")
+    order = sorted(range(len(hits)), key=lambda i: (-scores[i], i))
+    return [{**hits[i], "rerank_score": round(float(scores[i]), 4)} for i in order]
 
 
 # --- sentence splitting (used for highlights) -------------------------------------------------------------

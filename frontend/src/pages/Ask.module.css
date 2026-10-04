@@ -268,3 +268,23 @@
     display: none;
   }
 }
+
+.route {
+  display: inline-block;
+  margin: 0 0 0.5rem;
+  padding: 0.05rem 0.55rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--primary);
+  border: 1px solid color-mix(in srgb, var(--primary) 50%, transparent);
+  border-radius: 999px;
+  cursor: help;
+}
+
+.meta {
+  margin: 0.5rem 0 0;
+  font-size: 0.78rem;
+  color: var(--muted);
+}

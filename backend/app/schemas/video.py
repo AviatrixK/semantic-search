@@ -39,3 +39,6 @@ class SearchHit(BaseModel):
     text: str
     score: float
     highlight: str | None = None
+    rrf: float | None = None  # hybrid mode: Reciprocal Rank Fusion score (the ranking key)
+    found_by: list[str] | None = None  # hybrid mode: which searches returned it ("vector", "keyword")
+    rerank_score: float | None = None  # only with RERANK on
