@@ -88,6 +88,22 @@ docker compose exec api python -m app.scripts.backfill_sentences
 Until the backfill runs, highlights still work but are computed per request (about half a second).
 Re-run the backfill whenever the sentence splitter changes: it rebuilds stale rows as well as filling in missing ones.
 
+## Ask (answers with citations)
+`POST /api/ask {"question": "..."}` retrieves the 8 best transcript chunks, asks Gemini to answer **only** from them and to cite `[n]`, and
+returns `{answer, citations: [{n, video_id, title, start_sec, end_sec}], mode: "rag"}`. Citations that do not exist are dropped; when
+nothing relevant is found the model is not called at all. Login required, 10 questions per minute per user.
+
+It needs a Gemini API key (not set by default). One-time setup, PowerShell:
+```powershell
+# 1. add to .env:   GEMINI_API_KEY=your-key        (optional: LLM_MODEL=<model id>, default is the alias gemini-flash-latest)
+docker compose up -d api            # recreates the api container so it sees the new environment (no rebuild needed)
+docker compose exec api python -m app.scripts.check_llm            # ONE real tiny request: confirms key, model and network
+docker compose exec api python -m app.scripts.check_llm --models   # if it says the model was rejected: lists the ids your key can use
+```
+If a model id is rejected, set `LLM_MODEL` in `.env` to one of the listed ids and run `docker compose up -d api` again. In the app, the
+**Ask** tab is a chat: click a numbered chip (or a source under the answer) to play that moment in the player beside it. Without a key,
+Ask shows "Ask is not set up yet: an administrator needs to configure GEMINI_API_KEY." instead of failing mysteriously.
+
 ## Smoke test the pipeline (PowerShell, stack running)
 ```powershell
 .\scripts\smoke_ingest.ps1 -Email admin@example.com -Password 'ChangeMe123!' -File "sample\purpose.mp4" -ExpectedChunks 59

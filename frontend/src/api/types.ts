@@ -54,3 +54,18 @@ export interface Chunk {
 export interface StreamOut {
   url: string
 }
+
+/** A source of an /api/ask answer: the video moment behind a [n] marker. */
+export interface Citation {
+  n: number
+  video_id: string
+  title: string
+  start_sec: number
+  end_sec: number
+}
+
+export interface AskOut {
+  answer: string
+  citations: Citation[]
+  mode: 'rag'
+}

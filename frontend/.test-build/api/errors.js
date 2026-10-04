@@ -87,6 +87,9 @@ export function describeError(err, context) {
             return 'This job no longer exists. The video may have been deleted.';
         if ((context === 'stream' || context === 'transcript') && err.status === 404)
             return 'This video is no longer available.';
+        // The backend's 503 for /api/ask carries a short, safe, user-facing reason (not configured, busy, model rejected...).
+        if (context === 'ask' && err.status === 503 && err.message)
+            return err.message;
         if (err.status === 401) {
             return context === 'login' ? 'Incorrect email or password.' : 'Your session has expired. Please log in again.';
         }

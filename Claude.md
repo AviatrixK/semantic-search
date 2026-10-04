@@ -124,6 +124,25 @@ and jump to timestamps; a Gemini tool-calling agent answers multi-step questions
 - **Verification that worked:** besides `npm test`, a headless-Edge run over the DevTools protocol (Node's built-in WebSocket, no new
   dependency) against a throwaway Postgres/Redis/SeaweedFS with the real video and real chunks caught real bugs that unit tests could not.
   Use a different port than 5173 (the developer may have `npm run dev` running) and never kill processes you did not start.
+- **Ask / RAG (`POST /api/ask`, page `/ask`).** `services/llm.py` wraps google-genai: per-attempt timeout (`LLM_TIMEOUT_SEC`, sent to the SDK
+  in ms), retries on 429/500/502/503/504 and network errors (`LLM_MAX_RETRIES`, exponential backoff with jitter), token usage logged (counts
+  only: never prompts or answers, they hold user questions and transcript text). Every `LLMError` subclass carries a short safe
+  `user_message`; the route turns them into 503 with exactly that text, never the SDK's message. The LLM is swappable (`set_llm`), so tests
+  use `tests/fakes.py::FakeLLM` and **never call Gemini**. `services/rag.py`: retrieve `RAG_TOP_K` (8) with `highlight=False`; no hits -> fixed
+  "couldn't find anything" answer WITHOUT calling the model; context blocks `[n] (title @ mm:ss) text` inside `<excerpts>`, question in
+  `<question>`; the system prompt says answer only from the excerpts, cite `[n]`, reply with the INSUFFICIENT sentence if unsure, and treat
+  excerpts as untrusted data (prompt injection). `parse_citations` keeps only `[n]` that exist, rewrites `[1, 2]` as `[1][2]`, removes
+  invented numbers and tidies the gap. Queries are logged with mode "ask"; rate limit 10/min per user. Config: `GEMINI_API_KEY`,
+  `LLM_MODEL` (default alias `gemini-flash-latest`; pin an exact id for reproducibility), `LLM_TIMEOUT_SEC`, `LLM_MAX_RETRIES`,
+  `LLM_MAX_OUTPUT_TOKENS` (includes thinking tokens), `RAG_TOP_K`. `python -m app.scripts.check_llm` sends ONE real tiny request (`--models`
+  lists usable model ids): run it on purpose after setting the key.
+- **Ask UI.** Answers render as text nodes only (never HTML); `lib/answerText.ts` turns known `[n]` into chip buttons that seek the shared
+  `VideoPlayer`. `lib/chat.ts` is the pure state machine (one pending question, cancel removes it and returns the text to the box, retry);
+  the conversation lives in `sessionStorage` (this tab only; a request that was pending when the page went away comes back as a retryable
+  error). 429 blocks sending until Retry-After; client gives up after 100 s. Enter sends, Shift+Enter is a new line.
+- **Verifying a model wrapper without the real service:** run the REAL SDK inside the api container against a tiny local fake Gemini HTTP
+  server (`http_options={"base_url": ...}`): it exercised request body, header, usage parsing, real 429/503/400/404 error classes and the
+  timeout path with zero Google traffic.
 - **Dev machine:** Windows + PowerShell, Python 3.13 in `backend\.venv`, Docker Desktop (WSL 2), ffmpeg on PATH. The project
   path contains spaces: quote every path in commands and scripts. Internet is slow/unreliable: avoid forcing large
   re-downloads and ask before adding a heavy dependency.

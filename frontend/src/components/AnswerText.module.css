@@ -1,0 +1,41 @@
+.text {
+  margin: 0;
+  white-space: pre-wrap; /* keeps the model's line breaks and bullet lists */
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+}
+
+/* the [n] marker as a small round button */
+.chip {
+  display: inline-grid;
+  place-items: center;
+  min-width: 1.4rem;
+  height: 1.4rem;
+  margin: 0 0.1rem;
+  padding: 0 0.3rem;
+  vertical-align: baseline;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 12%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--primary) 45%, transparent);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.chip:hover {
+  background: color-mix(in srgb, var(--primary) 24%, var(--surface));
+}
+
+.chip:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.selected {
+  color: var(--primary-text);
+  background: var(--primary);
+}

@@ -51,6 +51,11 @@ os.environ.update({
     "RATE_ASK_PER_MIN": "10",
     "MIN_SCORE": "0.25",
     "EMBED_CACHE_TTL_SEC": "86400",
+    "LLM_MODEL": "test-model",
+    "LLM_TIMEOUT_SEC": "5",
+    "LLM_MAX_RETRIES": "2",
+    "LLM_MAX_OUTPUT_TOKENS": "256",
+    "RAG_TOP_K": "8",
     "GEMINI_API_KEY": "",
 })
 

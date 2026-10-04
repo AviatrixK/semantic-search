@@ -31,6 +31,11 @@ class Settings(BaseSettings):
     RATE_ASK_PER_MIN: int = 10  # per user
     MIN_SCORE: float = 0.25  # cosine similarity below this is dropped from search results
     EMBED_CACHE_TTL_SEC: int = 86400
+    LLM_MODEL: str = "gemini-flash-latest"  # alias for the newest Flash model; pin an exact model id to freeze behaviour
+    LLM_TIMEOUT_SEC: float = 30.0  # per attempt
+    LLM_MAX_RETRIES: int = 2  # extra attempts on 429/5xx/timeouts (so up to 3 calls)
+    LLM_MAX_OUTPUT_TOKENS: int = 2048  # includes thinking tokens on thinking models
+    RAG_TOP_K: int = 8  # transcript chunks given to the model
     GEMINI_API_KEY: str = ""
 
 

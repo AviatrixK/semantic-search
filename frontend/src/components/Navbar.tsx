@@ -30,6 +30,9 @@ export default function Navbar() {
               <NavLink to="/" end className={linkClass}>
                 Search
               </NavLink>
+              <NavLink to="/ask" className={linkClass}>
+                Ask
+              </NavLink>
               <NavLink to="/library" className={linkClass}>
                 Library
               </NavLink>

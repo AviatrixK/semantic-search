@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import auth, search, videos
+from app.api.routes import ask, auth, search, videos
 from app.core.config import settings
 from app.services import storage
 
@@ -21,6 +21,7 @@ app.add_middleware(CORSMiddleware, allow_origins=settings.CORS_ORIGINS, allow_cr
 app.include_router(auth.router)
 app.include_router(videos.router)
 app.include_router(search.router)
+app.include_router(ask.router)
 
 
 @app.get("/health")

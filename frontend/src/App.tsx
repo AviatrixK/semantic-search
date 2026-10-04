@@ -4,6 +4,7 @@ import ProtectedRoute from './components/ProtectedRoute'
 import Spinner from './components/Spinner'
 import { useAuth } from './context/AuthContext'
 import AdminVideos from './pages/AdminVideos'
+import Ask from './pages/Ask'
 import Library from './pages/Library'
 import Login from './pages/Login'
 import NotFound from './pages/NotFound'
@@ -45,6 +46,14 @@ export default function App() {
           element={
             <ProtectedRoute>
               <Search />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/ask"
+          element={
+            <ProtectedRoute>
+              <Ask />
             </ProtectedRoute>
           }
         />
