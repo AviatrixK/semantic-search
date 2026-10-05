@@ -7,3 +7,8 @@ node_modules/
 *.wav
 sample/
 BuildPhase.md
+.env.prod
+.env.*
+!.env.example
+!.env.prod.example
+backups/

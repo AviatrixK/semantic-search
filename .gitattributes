@@ -1,0 +1,5 @@
+# Shell scripts, Dockerfiles and the Caddyfile run on Linux: keep LF even when checked out on Windows.
+*.sh text eol=lf
+Dockerfile* text eol=lf
+Caddyfile text eol=lf
+*.yml text eol=lf

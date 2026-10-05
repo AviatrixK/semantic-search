@@ -175,6 +175,14 @@ and jump to timestamps; a Gemini tool-calling agent answers multi-step questions
   (the server memory records the repeat as another turn). A11y/speed: skip link, page title + live region per route (`lib/titles.ts`), Ask/Watch/Admin
   are `React.lazy` with navbar prefetch and `RouteErrorBoundary`, skeletons, reduced motion, 44px targets on coarse pointers. Verified with headless
   Edge against a throwaway mock backend serving a real sample video. NOT done: an in-chat video filter (no such backend parameter).
+- **Production (Phase 13, one EC2 t3.medium, see `docs/DEPLOY.md`).** `docker-compose.prod.yml` (+ `.env.prod`, `Caddyfile`, `backend/Dockerfile.prod`,
+  `frontend/Dockerfile`, `scripts/deploy.sh`, `scripts/backup.sh`); run with `--env-file .env.prod`. Services: postgres, redis, api (gunicorn + uvicorn
+  workers, `WEB_CONCURRENCY` 2), worker (`--concurrency=1`, no `-B`), beat, caddy (the only published ports 80/443; serves the built React app, proxies
+  `/api` and `/auth`, `flush_interval -1` for SSE). Storage is AWS S3: `S3_ENDPOINT` unset = regional AWS endpoint + SigV4 + the EC2 instance role
+  (keys unset); set = SeaweedFS as in dev (dev `.env` needs `AWS_REGION=us-east-1`). `APP_ENV=production` (set by the prod compose) makes `Settings` refuse
+  default JWT_SECRET / DB password / `COOKIE_SECURE=false` and makes `storage.ensure_bucket` fail instead of creating the bucket. The prod image bakes
+  Whisper + embedder (build args `WHISPER_SIZE`, `EMBED_MODEL`). The frontend only plays S3 videos via `<video>` (no CORS rule needed; adding fetch/XHR/crossOrigin
+  on S3 URLs would need one). Not verified on a real server yet.
 - **Verifying a model wrapper without the real service:** run the REAL SDK inside the api container against a tiny local fake Gemini HTTP
   server (`http_options={"base_url": ...}`): it exercised request body, header, usage parsing, real 429/503/400/404 error classes and the
   timeout path with zero Google traffic.

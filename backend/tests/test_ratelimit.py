@@ -1,4 +1,5 @@
 import uuid
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -104,7 +105,15 @@ def register_and_login(api, email="ann@example.com"):
     return {"Authorization": f"Bearer {r.json()['access_token']}"}
 
 
-def test_login_limited_to_5_per_minute_per_email(api):
+@pytest.fixture
+def mid_window():
+    """The limiter is a fixed window: a test whose requests straddle a minute boundary would get a fresh counter and
+    flake. Pin the clock to the middle of a window."""
+    with patch.object(ratelimit, "time", SimpleNamespace(time=lambda: 1_000_000_020.0)):
+        yield
+
+
+def test_login_limited_to_5_per_minute_per_email(api, mid_window):
     api.post("/auth/register", json={"email": "ann@example.com", "password": "Passw0rd123"})
     bad = {"email": "ann@example.com", "password": "Wrong1234"}
     assert [api.post("/auth/login", json=bad).status_code for _ in range(5)] == [401] * 5
@@ -118,7 +127,7 @@ def test_login_limited_to_5_per_minute_per_email(api):
     assert api.post("/auth/login", json={"email": "bob@example.com", "password": "Passw0rd123"}).status_code == 200
 
 
-def test_login_limit_ignores_email_case(api):
+def test_login_limit_ignores_email_case(api, mid_window):
     bad = {"password": "Wrong1234"}
     for e in ["ann@example.com", "ANN@example.com", "Ann@Example.com", "ann@EXAMPLE.com", "aNN@example.com"]:
         assert api.post("/auth/login", json={"email": e, **bad}).status_code == 401
@@ -131,7 +140,7 @@ def test_limiter_state_is_flushed_between_tests(api):
     assert api.post("/auth/login", json=bad).status_code == 401
 
 
-def test_search_limited_to_30_per_minute_per_user(api):
+def test_search_limited_to_30_per_minute_per_user(api, mid_window):
     alice = register_and_login(api, "alice@example.com")
     bob = register_and_login(api, "bob@example.com")
     with patch.object(retrieval, "vector_search", return_value=[]):  # the embedding model is never loaded

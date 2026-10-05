@@ -1,0 +1,51 @@
+# Production reverse proxy + static server. DOMAIN and MAX_UPLOAD_MB come from the environment (docker-compose.prod.yml).
+# DOMAIN is e.g. 13-201-45-67.sslip.io: Caddy gets a Let's Encrypt (or ZeroSSL) certificate for it automatically.
+{
+	servers {
+		timeouts {
+			read_header 30s
+			read_body   20m   # slow uploads of large videos
+			idle        5m
+			# write: left unlimited on purpose, SSE streams are long-lived
+		}
+	}
+}
+
+{$DOMAIN} {
+	# Body limit = the app's MAX_UPLOAD_MB (the app still enforces it with a readable 413).
+	request_body {
+		max_size {$MAX_UPLOAD_MB}MiB
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	# One origin for UI and API: the refresh cookie (path=/auth, SameSite=Lax) stays first-party.
+	@backend path /api/* /auth/*
+	handle @backend {
+		reverse_proxy api:8000 {
+			flush_interval -1              # never buffer: the agent trace is Server-Sent Events
+			transport http {
+				dial_timeout 5s
+				response_header_timeout 20m  # an upload only gets its response after the video reached S3
+				read_timeout 20m
+			}
+		}
+	}
+
+	# Everything else: the built React app; unknown paths fall back to index.html (client-side routing).
+	handle {
+		root * /srv
+		encode zstd gzip                   # only here: never compress the SSE stream
+		header Cache-Control "no-cache"
+		@assets path /assets/*
+		header @assets Cache-Control "public, max-age=31536000, immutable"
+		try_files {path} /index.html
+		file_server
+	}
+}

@@ -1,0 +1,28 @@
+# Production image for api, worker and beat. Same layer structure as backend/Dockerfile (CPU-only torch first,
+# pip cache mounts), plus gunicorn and the ML models baked in so the first request/job never downloads anything.
+FROM python:3.11-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg procps && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 HF_HOME=/opt/hf
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install torch --index-url https://download.pytorch.org/whl/cpu
+COPY requirements.txt .
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r requirements.txt
+
+# Preload the Whisper and embedding models into the image (HF_HOME). Must match WHISPER_SIZE / EMBED_MODEL in .env.prod:
+# docker-compose.prod.yml passes them as build args, so change them and rebuild.
+ARG WHISPER_SIZE=base
+ARG EMBED_MODEL=sentence-transformers/all-MiniLM-L6-v2
+RUN WHISPER_SIZE="$WHISPER_SIZE" EMBED_MODEL="$EMBED_MODEL" python -c "import os; \
+from faster_whisper import WhisperModel; WhisperModel(os.environ['WHISPER_SIZE'], device='cpu', compute_type='int8'); \
+from sentence_transformers import SentenceTransformer; SentenceTransformer(os.environ['EMBED_MODEL'])"
+
+COPY . .
+RUN useradd --system --uid 10001 --home-dir /nonexistent app && chown -R app /opt/hf
+USER app
+
+# 2 workers fit 4 GB next to the Whisper worker; raise WEB_CONCURRENCY only on a bigger instance (each loads the embedder).
+# --timeout is the worker heartbeat (uploads and SSE streams are long but keep the event loop alive).
+ENV WEB_CONCURRENCY=2
+CMD ["gunicorn", "app.main:app", "-k", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:8000",      "--timeout", "300", "--graceful-timeout", "30", "--keep-alive", "75",      "--max-requests", "2000", "--max-requests-jitter", "200", "--access-logfile", "-"]

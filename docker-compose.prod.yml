@@ -1,0 +1,135 @@
+# Production stack for ONE EC2 instance (t3.medium: 2 vCPU, 4 GB). No storage container: videos live in AWS S3.
+# Always run with the env file for BOTH interpolation and the containers:
+#   docker compose --env-file .env.prod -f docker-compose.prod.yml <command>      (scripts/deploy.sh does this)
+# Only caddy publishes ports. Postgres and Redis exist only on the private compose network.
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }   # container logs never fill the disk
+
+x-backend: &backend
+  build:
+    context: ./backend
+    dockerfile: Dockerfile.prod
+    args:
+      WHISPER_SIZE: ${WHISPER_SIZE:-base}
+      EMBED_MODEL: ${EMBED_MODEL:-sentence-transformers/all-MiniLM-L6-v2}
+  env_file: .env.prod
+  restart: unless-stopped
+  logging: *logging
+  environment: &backend-env
+    APP_ENV: production   # enables the startup guards (known-default secrets) and stops S3 bucket auto-creation
+    CORS_ORIGINS: '["https://${DOMAIN:?set DOMAIN in .env.prod}"]'   # derived from DOMAIN; same-origin anyway
+    S3_ENDPOINT: ""        # unset = real AWS S3; credentials come from the EC2 instance role
+    S3_PUBLIC_ENDPOINT: ""
+    S3_ACCESS_KEY: ""
+    S3_SECRET_KEY: ""
+    DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in .env.prod}
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    logging: *logging
+    environment:
+      POSTGRES_USER: svs
+      POSTGRES_DB: svs
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.prod}
+    command: >
+      postgres -c shared_buffers=256MB -c effective_cache_size=1GB -c work_mem=8MB
+      -c maintenance_work_mem=128MB -c max_connections=50
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro   # runs only when the volume is empty (first start)
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U svs -d svs"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    logging: *logging
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy volatile-lru
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  api:
+    <<: *backend
+    # CMD (gunicorn + uvicorn workers) comes from backend/Dockerfile.prod
+    environment:
+      <<: *backend-env
+      FORWARDED_ALLOW_IPS: "*"   # trust X-Forwarded-For from caddy (the port is not published) so rate limits see real client IPs
+    mem_limit: 1500m
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8000/health', timeout=4).read()"]
+      interval: 15s
+      timeout: 6s
+      retries: 5
+      start_period: 90s   # each gunicorn worker imports torch on boot
+
+  worker:
+    <<: *backend
+    command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=1
+    mem_limit: 2g   # Whisper + embedder + ffmpeg; a runaway job is killed here instead of taking the instance down
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.workers.celery_app inspect ping -d celery@$$HOSTNAME -t 15"]
+      interval: 60s
+      timeout: 25s
+      retries: 3
+      start_period: 90s
+
+  beat:
+    <<: *backend
+    command: celery -A app.workers.celery_app beat -s /tmp/celerybeat-schedule --loglevel=info
+    mem_limit: 512m
+    depends_on:
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'celery.*beat' > /dev/null"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  caddy:
+    build:
+      context: ./frontend
+      args:
+        VITE_MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-500}
+    restart: unless-stopped
+    logging: *logging
+    ports: ["80:80", "443:443"]
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in .env.prod}
+      MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-500}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data      # certificates: losing this volume re-issues them (rate limits!)
+      - caddy_config:/config
+    depends_on:
+      api: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:2019/config/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  pgdata:
+  redisdata:
+  caddy_data:
+  caddy_config:
