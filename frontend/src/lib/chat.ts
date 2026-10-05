@@ -47,6 +47,8 @@ export type ChatAction =
   | ({ type: 'answered'; id: string } & AnswerPayload)
   | { type: 'failed'; id: string; message: string }
   | { type: 'retry'; id: string }
+  /** Asks the same question again after an answer (not while another is pending). */
+  | { type: 'regenerate'; id: string }
   /** Drops a pending reply together with the question that caused it. */
   | { type: 'cancel'; id: string }
   | { type: 'clear' }
@@ -111,6 +113,10 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       return patch(state, action.id, 'pending', () => ({ status: 'error', error: action.message }))
     case 'retry':
       return isPending(state) ? state : patch(state, action.id, 'error', () => ({ status: 'pending', error: null, route: null, routeReason: null, trace: [], usage: null }))
+    case 'regenerate':
+      return isPending(state)
+        ? state
+        : patch(state, action.id, 'done', () => ({ status: 'pending', text: '', citations: [], error: null, route: null, routeReason: null, trace: [], usage: null }))
     case 'cancel': {
       const i = state.messages.findIndex((m) => m.id === action.id && m.role === 'assistant' && m.status === 'pending')
       if (i < 0) return state

@@ -1,0 +1,63 @@
+.page {
+  max-width: 96rem;
+  margin: 0 auto;
+  padding: 1rem 1.5rem 4rem;
+}
+
+/* sort chips: neutral pills, the selected one turns black (white in dark mode), like the category bar on YouTube */
+.chips {
+  display: flex;
+  gap: 0.6rem;
+  margin-bottom: 1.25rem;
+  overflow-x: auto;
+  padding-bottom: 0.2rem;
+}
+
+.chip {
+  flex: none;
+  padding: 0.4rem 0.9rem;
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--text);
+  background: var(--chip);
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background-color var(--ease), color var(--ease);
+}
+
+.chip:hover {
+  background: var(--chip-hover);
+}
+
+.on,
+.on:hover {
+  color: var(--chip-on-text);
+  background: var(--chip-on);
+}
+
+.empty,
+.note {
+  color: var(--muted);
+  max-width: 40rem;
+}
+
+.error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.65rem 0.9rem;
+  margin-bottom: 1rem;
+  border-radius: 10px;
+  background: var(--danger-bg);
+  border: 1px solid var(--danger-border);
+  color: var(--danger);
+}
+
+@media (max-width: 40rem) {
+  .page {
+    padding: 0.75rem 0.75rem 2rem;
+  }
+}

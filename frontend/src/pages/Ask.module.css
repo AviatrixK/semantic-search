@@ -228,7 +228,7 @@
 
 .player {
   position: sticky;
-  top: 1rem;
+  top: calc(var(--header-h) + 1rem);
   display: flex;
   flex-direction: column;
   gap: 0.6rem;
@@ -287,4 +287,40 @@
   margin: 0.5rem 0 0;
   font-size: 0.78rem;
   color: var(--muted);
+}
+
+/* answer style picker above the input */
+.options {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.9rem;
+}
+
+.style {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.select {
+  width: auto;
+  padding: 0.3rem 0.6rem;
+  font-size: 0.88rem;
+}
+
+.styleHint {
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+/* the question box: a fixed bar at the bottom would hide content on phones, so it stays in the page flow there */
+@media (max-width: 40rem) {
+  .composer {
+    flex-direction: column;
+    align-items: stretch;
+    bottom: 3.75rem; /* stay above the bottom menu bar */
+  }
 }

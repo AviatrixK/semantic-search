@@ -1,84 +1,131 @@
-.card {
-  list-style: none;
+.row {
+  display: flex;
+  gap: 1rem;
+  color: var(--text);
+  text-decoration: none;
+}
+
+.thumb {
+  flex: 0 0 min(22rem, 42%);
+  min-width: 0;
+}
+
+.row:hover .thumb > div {
+  border-radius: 4px; /* squares off on hover, like on YouTube */
+}
+
+.body {
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.4rem;
-  padding: 0.85rem 1rem;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  cursor: pointer;
-}
-
-.card:hover {
-  border-color: var(--primary);
-}
-
-/* keyboard selection */
-.active {
-  outline: 2px solid var(--primary);
-  outline-offset: 1px;
-}
-
-/* the result loaded in the player */
-.playing {
-  border-color: var(--primary);
-  background: color-mix(in srgb, var(--primary) 7%, var(--surface));
-}
-
-.head {
-  display: flex;
-  align-items: baseline;
-  gap: 0.6rem;
-  min-width: 0;
+  gap: 0.3rem;
+  padding-top: 0.1rem;
 }
 
 .title {
-  flex: 1;
-  min-width: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-weight: 600;
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 500;
+  line-height: 1.35;
 }
 
-.range {
-  font-variant-numeric: tabular-nums;
-  font-size: 0.85rem;
-  color: var(--muted);
-  white-space: nowrap;
-}
-
-.badge {
-  font-size: 0.7rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+.row:hover .title {
   color: var(--primary);
 }
 
-.text {
+.meta {
   margin: 0;
-  font-size: 0.92rem;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.moment {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.15rem 0;
+}
+
+.chip {
+  padding: 0.1rem 0.6rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--primary);
+  background: var(--primary-soft);
+  border-radius: 999px;
+}
+
+.range {
+  font-size: 0.82rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.text {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin: 0;
+  font-size: 0.9rem;
   line-height: 1.5;
   color: var(--muted);
 }
 
 .text strong {
   color: var(--text);
-  font-weight: 650;
+  font-weight: 600;
+}
+
+.foot {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 0.2rem;
+}
+
+/* which search found it (hybrid mode) */
+.found {
+  flex: none;
+  padding: 0.05rem 0.55rem;
+  font-size: 0.72rem;
+  color: var(--muted);
+  background: var(--chip);
+  border-radius: 6px;
+  white-space: nowrap;
 }
 
 .score {
-  height: 3px;
-  background: var(--border);
-  border-radius: 999px;
+  flex: 0 1 8rem;
+  height: 4px;
   overflow: hidden;
+  background: var(--chip);
+  border-radius: 999px;
 }
 
 .score span {
   display: block;
   height: 100%;
   background: var(--primary);
-  opacity: 0.55;
+  opacity: 0.6;
+}
+
+/* phones: thumbnail on top, full width (like the YouTube app) */
+@media (max-width: 40rem) {
+  .row {
+    flex-direction: column;
+    gap: 0.6rem;
+  }
+
+  .thumb {
+    flex-basis: auto;
+  }
 }

@@ -53,3 +53,28 @@ export function statusBadge(status) {
             return { label: status, tone: 'neutral' };
     }
 }
+/** YouTube-style length: "4:43", "27:48", "1:02:03". "" when unknown. */
+export function formatClock(totalSeconds) {
+    if (totalSeconds === null || totalSeconds === undefined || !Number.isFinite(totalSeconds) || totalSeconds < 0)
+        return '';
+    const s = Math.floor(totalSeconds);
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = String(s % 60).padStart(2, '0');
+    return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${sec}` : `${m}:${sec}`;
+}
+const UNITS = [['year', 365 * 86400], ['month', 30 * 86400], ['week', 7 * 86400], ['day', 86400], ['hour', 3600], ['minute', 60]];
+/** "3 days ago", "1 month ago", "just now". `now` is injectable for tests. "" for an unreadable date. */
+export function formatRelative(iso, now = Date.now()) {
+    const then = new Date(iso).getTime();
+    if (Number.isNaN(then))
+        return '';
+    const seconds = Math.max(0, Math.floor((now - then) / 1000));
+    for (const [name, size] of UNITS) {
+        if (seconds >= size) {
+            const n = Math.floor(seconds / size);
+            return `${n} ${name}${n === 1 ? '' : 's'} ago`;
+        }
+    }
+    return 'just now';
+}

@@ -8,3 +8,57 @@
 .fatal p {
   color: var(--danger);
 }
+
+/* The page frame: header on top; below it the menu (left) and the page. Signed-out pages have no menu. */
+.shell {
+  --side-w: 14rem;
+  display: grid;
+  grid-template-columns: var(--side-w) minmax(0, 1fr);
+  grid-template-rows: auto 1fr;
+  grid-template-areas:
+    'head head'
+    'side main';
+  min-height: 100vh;
+}
+
+.shell[data-collapsed] {
+  --side-w: 4.75rem;
+}
+
+.shell[data-noside] {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    'head'
+    'main';
+}
+
+@media (max-width: 64rem) {
+  .shell {
+    --side-w: 4.75rem;
+  }
+}
+
+/* phones: no side column, the menu is a bar fixed at the bottom (leave room for it) */
+@media (max-width: 40rem) {
+  .shell {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      'head'
+      'main';
+    padding-bottom: 3.75rem;
+  }
+
+  .shell[data-noside] {
+    padding-bottom: 0;
+  }
+}
+
+/* the target of the "Skip to content" link: focusable by script, but it needs no visible ring */
+.main {
+  grid-area: main;
+  min-width: 0;
+}
+
+.main:focus {
+  outline: none;
+}

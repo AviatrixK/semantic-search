@@ -1,0 +1,117 @@
+.wrap {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem 1.25rem;
+}
+
+/* chips built from radio buttons: arrow keys and screen readers work natively */
+.modes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+  border: 0;
+}
+
+.mode {
+  position: relative;
+  display: inline-flex;
+  cursor: pointer;
+}
+
+.mode input {
+  position: absolute;
+  opacity: 0;
+  inset: 0;
+  margin: 0;
+  cursor: pointer;
+}
+
+.mode span {
+  padding: 0.4rem 0.9rem;
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--text);
+  background: var(--chip);
+  border-radius: 8px;
+  transition: background-color var(--ease), color var(--ease);
+}
+
+.mode:hover span {
+  background: var(--chip-hover);
+}
+
+.mode:has(input:checked) span {
+  color: var(--chip-on-text);
+  background: var(--chip-on);
+}
+
+.mode:has(input:focus-visible) span {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+}
+
+.field {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.select,
+.date {
+  width: auto;
+  height: 2.2rem;
+  padding: 0 0.7rem;
+  font-size: 0.88rem;
+  line-height: 1.2;
+  border-radius: 8px;
+}
+
+.select {
+  max-width: min(20rem, 60vw);
+  text-overflow: ellipsis;
+}
+
+.hint {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+@media (max-width: 40rem) {
+  .select,
+  .date {
+    height: 2.75rem;
+  }
+
+  .field {
+    flex: 1 1 9rem;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.15rem;
+  }
+
+  .select {
+    max-width: none;
+    width: 100%;
+  }
+
+  .date {
+    width: 100%;
+  }
+}

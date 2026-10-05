@@ -1,39 +1,57 @@
+/* Design tokens. The app is LIGHT by default; dark is only used when the user picks it with the theme button (data-theme="dark" on
+   <html>, set before first paint by index.html). The operating system's dark-mode setting is deliberately ignored. */
 :root {
-  color-scheme: light dark;
-  --bg: #f6f7f9;
+  color-scheme: light;
+  --header-h: 3.5rem;
+  --bg: #f6f7fc;
   --surface: #ffffff;
-  --text: #1b1f24;
-  --muted: #5b6573;
-  --border: #d3d9e1;
-  --primary: #3b5bdb;
-  --primary-hover: #2f4ac0;
+  --surface-2: #eef0f8;
+  --text: #0f0f14;
+  --muted: #5e6475;
+  --border: #dde0ec;
+  --primary: #065fd4;
+  --primary-hover: #0a4fb0;
   --primary-text: #ffffff;
+  --primary-soft: #e6f0ff;
+  --brand: #4f46e5;
+  --chip: #eceef7;
+  --chip-hover: #dfe2f0;
+  --chip-on: #0f0f14;
+  --chip-on-text: #ffffff;
   --danger: #b42318;
   --danger-bg: #fef3f2;
   --danger-border: #fecdca;
   --ok: #067647;
-  --radius: 10px;
+  --radius: 12px;
   --shadow: 0 1px 2px rgba(16, 24, 40, 0.06), 0 8px 24px rgba(16, 24, 40, 0.06);
-  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --shadow-lift: 0 2px 4px rgba(16, 24, 40, 0.06), 0 10px 28px rgba(16, 24, 40, 0.12);
+  --ease: 150ms cubic-bezier(0.2, 0, 0, 1);
+  font-family: Roboto, system-ui, -apple-system, 'Segoe UI', sans-serif;
   line-height: 1.5;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0f1319;
-    --surface: #171c24;
-    --text: #e8ecf1;
-    --muted: #9aa5b4;
-    --border: #2d3544;
-    --primary: #7c93ff;
-    --primary-hover: #98aaff;
-    --primary-text: #0b0f16;
-    --danger: #ffb4ab;
-    --danger-bg: #2c1513;
-    --danger-border: #5c2a26;
-    --ok: #6ce9a6;
-    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.35);
-  }
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #0f1117;
+  --surface: #181b24;
+  --surface-2: #20242f;
+  --text: #f1f1f1;
+  --muted: #a3a9b8;
+  --border: #2d3240;
+  --primary: #3ea6ff;
+  --primary-hover: #65b8ff;
+  --primary-text: #06101c;
+  --primary-soft: #14263a;
+  --chip: #272b38;
+  --chip-hover: #343948;
+  --chip-on: #f1f1f1;
+  --chip-on-text: #0f1117;
+  --danger: #ffb4ab;
+  --danger-bg: #2c1513;
+  --danger-border: #5c2a26;
+  --ok: #6ce9a6;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.35);
+  --shadow-lift: 0 2px 4px rgba(0, 0, 0, 0.45), 0 10px 28px rgba(0, 0, 0, 0.5);
 }
 
 *,
@@ -42,19 +60,31 @@
   box-sizing: border-box;
 }
 
+html {
+  scroll-padding-top: calc(var(--header-h) + 1rem);
+  -webkit-text-size-adjust: 100%;
+}
+
 body {
   margin: 0;
   min-height: 100vh;
   background: var(--bg);
   color: var(--text);
+  transition: background-color var(--ease), color var(--ease);
+}
+
+::selection {
+  background: color-mix(in srgb, var(--primary) 28%, transparent);
 }
 
 a {
   color: var(--primary);
+  text-underline-offset: 0.15em;
 }
 
 h1 {
   line-height: 1.25;
+  letter-spacing: -0.01em;
 }
 
 /* Shared form primitives */
@@ -63,14 +93,22 @@ h1 {
   padding: 0.6rem 0.75rem;
   font: inherit;
   color: var(--text);
-  background: var(--bg);
+  background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 10px;
+  transition: border-color var(--ease), box-shadow var(--ease);
+}
+
+.input:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--primary) 45%, var(--border));
 }
 
 .input:focus-visible,
 .btn:focus-visible,
-a:focus-visible {
+a:focus-visible,
+select:focus-visible,
+summary:focus-visible,
+button:focus-visible {
   outline: 2px solid var(--primary);
   outline-offset: 2px;
 }
@@ -83,12 +121,19 @@ a:focus-visible {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 0.4rem;
   padding: 0.6rem 1rem;
   font: inherit;
   font-weight: 600;
-  border-radius: 8px;
+  border-radius: 999px;
   border: 1px solid transparent;
   cursor: pointer;
+  text-decoration: none; /* also used on links that look like buttons */
+  transition: background-color var(--ease), border-color var(--ease), transform var(--ease);
+}
+
+.btn:active:not(:disabled) {
+  transform: translateY(1px);
 }
 
 .btn:disabled {
@@ -106,14 +151,13 @@ a:focus-visible {
 }
 
 .btn-secondary {
-  background: transparent;
+  background: var(--chip);
   color: var(--text);
-  border-color: var(--border);
-  padding: 0.35rem 0.75rem;
+  padding: 0.4rem 0.9rem;
 }
 
 .btn-secondary:hover:not(:disabled) {
-  background: var(--bg);
+  background: var(--chip-hover);
 }
 
 .sr-only {
@@ -123,4 +167,66 @@ a:focus-visible {
   overflow: hidden;
   clip-path: inset(50%);
   white-space: nowrap;
+}
+
+/* "Skip to content": the first tab stop on every page, visible only while focused. */
+.skip-link {
+  position: absolute;
+  left: 0.75rem;
+  top: -4rem;
+  z-index: 100;
+  padding: 0.5rem 0.9rem;
+  font-weight: 600;
+  color: var(--primary-text);
+  background: var(--primary);
+  border-radius: 999px;
+  text-decoration: none;
+}
+
+.skip-link:focus {
+  top: 0.75rem;
+}
+
+/* Loading placeholders: a shape that looks like the content that is coming. */
+.skeleton {
+  display: block;
+  border-radius: 8px;
+  background: linear-gradient(90deg, var(--surface-2) 25%, color-mix(in srgb, var(--surface-2) 55%, var(--surface)) 50%, var(--surface-2) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s linear infinite;
+}
+
+@keyframes shimmer {
+  to {
+    background-position: -200% 0;
+  }
+}
+
+/* Touch screens: comfortably large targets, and no zoom-on-focus in iOS (inputs stay at 16px). */
+@media (pointer: coarse) {
+  .btn,
+  .btn-secondary {
+    min-height: 44px;
+  }
+
+  .input,
+  select {
+    min-height: 44px;
+    font-size: 1rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .skeleton {
+    animation: none;
+  }
 }

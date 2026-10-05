@@ -39,3 +39,11 @@ export function clock(seconds: number): string {
   const s = Math.max(0, Math.floor(seconds))
   return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`
 }
+
+/** The answer as plain text for the clipboard: the text with its [n] markers, then a numbered list of what they point to. */
+export function answerAsText(text: string, citations: readonly Citation[]): string {
+  const body = text.trim()
+  if (citations.length === 0) return body
+  const sources = citations.map((c) => `[${c.n}] ${c.title} @ ${clock(c.start_sec)}`)
+  return `${body}\n\nSources:\n${sources.join('\n')}`
+}

@@ -1,0 +1,35 @@
+.grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr));
+  gap: 1.75rem 1rem;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  color: var(--text);
+  text-decoration: none;
+}
+
+.card:hover > div:first-child {
+  border-radius: 4px; /* the thumbnail squares off on hover, like on YouTube */
+}
+
+.title {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.meta {
+  font-size: 0.85rem;
+  color: var(--muted);
+}

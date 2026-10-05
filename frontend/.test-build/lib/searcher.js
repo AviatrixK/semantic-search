@@ -1,8 +1,9 @@
+import { DEFAULT_FILTERS, filtersKey } from './searchParams.js';
 const defaultSchedule = (fn, ms) => {
     const id = setTimeout(fn, ms);
     return () => clearTimeout(id);
 };
-export const IDLE = { status: 'idle', query: '', hits: [], error: null, retryAfter: null };
+export const IDLE = { status: 'idle', query: '', filtersKey: '', hits: [], error: null, retryAfter: null };
 /**
  * Debounced search with cancellation: typing never queues requests (a new one aborts the previous), an unchanged query
  * is not searched twice, and only the newest response may reach the screen. Previous results stay visible while the
@@ -13,6 +14,8 @@ export function createSearcher(o) {
     const minLength = o.minLength ?? 2;
     const schedule = o.schedule ?? defaultSchedule;
     let query = '';
+    let filters = o.filters ?? DEFAULT_FILTERS;
+    let fkey = filtersKey(filters);
     let state = IDLE;
     let cancelTimer = null;
     let controller = null;
@@ -35,23 +38,25 @@ export function createSearcher(o) {
         const q = query;
         if (q.length < minLength)
             return;
-        if (state.query === q && (state.status === 'ready' || state.status === 'loading'))
+        if (state.query === q && state.filtersKey === fkey && (state.status === 'ready' || state.status === 'loading'))
             return; // already showing / fetching
         controller?.abort();
         const mine = ++runId;
         controller = new AbortController();
-        emit({ ...state, status: 'loading', query: q, error: null, retryAfter: null });
+        emit({ ...state, status: 'loading', query: q, filtersKey: fkey, error: null, retryAfter: null });
+        const used = filters;
+        const usedKey = fkey;
         try {
-            const hits = await o.run(q, controller.signal);
+            const hits = await o.run(q, controller.signal, used);
             if (mine !== runId)
                 return;
-            emit({ status: 'ready', query: q, hits, error: null, retryAfter: null });
+            emit({ status: 'ready', query: q, filtersKey: usedKey, hits, error: null, retryAfter: null });
         }
         catch (error) {
             if (mine !== runId)
                 return; // aborted or superseded
             const d = o.describe(error);
-            emit({ status: 'error', query: q, hits: state.hits, error: d.message, retryAfter: d.retryAfter ?? null });
+            emit({ status: 'error', query: q, filtersKey: usedKey, hits: state.hits, error: d.message, retryAfter: d.retryAfter ?? null });
         }
     }
     return {
@@ -67,7 +72,7 @@ export function createSearcher(o) {
                 emit(IDLE);
                 return;
             }
-            if (state.query === q && state.status === 'ready') {
+            if (state.query === q && state.filtersKey === fkey && state.status === 'ready') {
                 stopPending();
                 return;
             }
@@ -78,6 +83,18 @@ export function createSearcher(o) {
             cancelTimer = null;
             if (state.query === query && state.status === 'error')
                 state = { ...state, status: 'idle', query: '' }; // retry after an error
+            void execute();
+        },
+        setFilters(next) {
+            const key = filtersKey(next);
+            if (key === fkey)
+                return;
+            filters = next;
+            fkey = key;
+            if (query.length < minLength)
+                return; // nothing to search yet: the filters apply to the next query
+            cancelTimer?.();
+            cancelTimer = null;
             void execute();
         },
         dispose() {

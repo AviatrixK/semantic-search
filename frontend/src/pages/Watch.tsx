@@ -6,7 +6,7 @@ import VideoPlayer from '../components/VideoPlayer'
 import type { SeekRequest } from '../components/VideoPlayer'
 import { useTranscript } from '../hooks/useTranscript'
 import { useVideos } from '../hooks/useVideos'
-import { formatDate, formatDuration } from '../lib/format'
+import { formatClock, formatDate, formatRelative } from '../lib/format'
 import { parseTimeParam, watchPath } from '../lib/timeParam'
 import { activeLineIndex } from '../lib/transcript'
 import type { TranscriptLine } from '../lib/transcript'
@@ -73,19 +73,21 @@ export default function Watch() {
 
   return (
     <main className={styles.page}>
-      <p className={styles.crumbs}><Link to="/library">← Library</Link></p>
       <div className={styles.layout}>
         <section className={styles.playerCol} aria-label="Video">
           <VideoPlayer request={request} label={video?.title ?? 'Video player'} onTime={onTime} emptyMessage="Loading…" />
           <div className={styles.info}>
             <h1 title={video?.title}>{video?.title ?? 'Loading…'}</h1>
             <p className={styles.muted}>
-              {video && `${formatDuration(video.duration_sec)} · ${formatDate(video.created_at)}`}
+              {video && [formatClock(video.duration_sec), `Uploaded ${formatRelative(video.created_at) || formatDate(video.created_at)}`].filter(Boolean).join(' · ')}
             </p>
             <div className={styles.actions}>
               <button type="button" className="btn btn-secondary" onClick={() => void copyLink()}>
                 Copy link to this moment
               </button>
+              {video?.status === 'ready' && (
+                <Link className="btn btn-secondary" to={`/search?${new URLSearchParams({ video: videoId })}`}>Search in this video</Link>
+              )}
               {copied && <span className={styles.copied} role="status">{copied}</span>}
             </div>
             {video && video.status !== 'ready' && (

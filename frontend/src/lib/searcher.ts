@@ -1,9 +1,13 @@
 import type { SearchHit } from '../api/types.js'
+import { DEFAULT_FILTERS, filtersKey } from './searchParams.js'
+import type { SearchFilters } from './searchParams.js'
 
 export interface SearchState {
   status: 'idle' | 'loading' | 'ready' | 'error'
   /** The query the hits (or the error) belong to. */
   query: string
+  /** The filters (mode, video, date) they belong to: see filtersKey(). */
+  filtersKey: string
   hits: SearchHit[]
   error: string | null
   /** Seconds to wait before retrying, when the server rate-limited us. */
@@ -11,7 +15,9 @@ export interface SearchState {
 }
 
 export interface SearcherOptions {
-  run: (query: string, signal: AbortSignal) => Promise<SearchHit[]>
+  run: (query: string, signal: AbortSignal, filters: SearchFilters) => Promise<SearchHit[]>
+  /** Mode and filters to start with (default: hybrid, no filters). */
+  filters?: SearchFilters
   onState: (state: SearchState) => void
   /** Maps a thrown error to text for the screen (and Retry-After seconds for 429). */
   describe: (error: unknown) => { message: string; retryAfter?: number }
@@ -27,6 +33,8 @@ export interface Searcher {
   setQuery(query: string): void
   /** Enter key: searches right away (does nothing if these results are already showing). */
   submit(): void
+  /** A mode or filter changed: searches again right away (no debounce) when there is a query to search. */
+  setFilters(filters: SearchFilters): void
   dispose(): void
 }
 
@@ -35,7 +43,7 @@ const defaultSchedule = (fn: () => void, ms: number) => {
   return () => clearTimeout(id)
 }
 
-export const IDLE: SearchState = { status: 'idle', query: '', hits: [], error: null, retryAfter: null }
+export const IDLE: SearchState = { status: 'idle', query: '', filtersKey: '', hits: [], error: null, retryAfter: null }
 
 /**
  * Debounced search with cancellation: typing never queues requests (a new one aborts the previous), an unchanged query
@@ -48,6 +56,8 @@ export function createSearcher(o: SearcherOptions): Searcher {
   const schedule = o.schedule ?? defaultSchedule
 
   let query = ''
+  let filters = o.filters ?? DEFAULT_FILTERS
+  let fkey = filtersKey(filters)
   let state: SearchState = IDLE
   let cancelTimer: (() => void) | null = null
   let controller: AbortController | null = null
@@ -70,19 +80,21 @@ export function createSearcher(o: SearcherOptions): Searcher {
     cancelTimer = null
     const q = query
     if (q.length < minLength) return
-    if (state.query === q && (state.status === 'ready' || state.status === 'loading')) return // already showing / fetching
+    if (state.query === q && state.filtersKey === fkey && (state.status === 'ready' || state.status === 'loading')) return // already showing / fetching
     controller?.abort()
     const mine = ++runId
     controller = new AbortController()
-    emit({ ...state, status: 'loading', query: q, error: null, retryAfter: null })
+    emit({ ...state, status: 'loading', query: q, filtersKey: fkey, error: null, retryAfter: null })
+    const used = filters
+    const usedKey = fkey
     try {
-      const hits = await o.run(q, controller.signal)
+      const hits = await o.run(q, controller.signal, used)
       if (mine !== runId) return
-      emit({ status: 'ready', query: q, hits, error: null, retryAfter: null })
+      emit({ status: 'ready', query: q, filtersKey: usedKey, hits, error: null, retryAfter: null })
     } catch (error) {
       if (mine !== runId) return // aborted or superseded
       const d = o.describe(error)
-      emit({ status: 'error', query: q, hits: state.hits, error: d.message, retryAfter: d.retryAfter ?? null })
+      emit({ status: 'error', query: q, filtersKey: usedKey, hits: state.hits, error: d.message, retryAfter: d.retryAfter ?? null })
     }
   }
 
@@ -98,7 +110,7 @@ export function createSearcher(o: SearcherOptions): Searcher {
         emit(IDLE)
         return
       }
-      if (state.query === q && state.status === 'ready') {
+      if (state.query === q && state.filtersKey === fkey && state.status === 'ready') {
         stopPending()
         return
       }
@@ -108,6 +120,16 @@ export function createSearcher(o: SearcherOptions): Searcher {
       cancelTimer?.()
       cancelTimer = null
       if (state.query === query && state.status === 'error') state = { ...state, status: 'idle', query: '' } // retry after an error
+      void execute()
+    },
+    setFilters(next) {
+      const key = filtersKey(next)
+      if (key === fkey) return
+      filters = next
+      fkey = key
+      if (query.length < minLength) return // nothing to search yet: the filters apply to the next query
+      cancelTimer?.()
+      cancelTimer = null
       void execute()
     },
     dispose() {

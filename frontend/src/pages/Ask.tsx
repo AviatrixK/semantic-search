@@ -3,11 +3,13 @@ import type { FormEvent, KeyboardEvent } from 'react'
 import { Link } from 'react-router-dom'
 import type { Citation } from '../api'
 import AgentTrace from '../components/AgentTrace'
+import AnswerActions from '../components/AnswerActions'
 import AnswerText, { citationKey } from '../components/AnswerText'
 import VideoPlayer from '../components/VideoPlayer'
 import type { SeekRequest } from '../components/VideoPlayer'
 import { useChat } from '../hooks/useChat'
 import { clock } from '../lib/answerText'
+import { ASK_MODE_OPTIONS, parseAskMode } from '../lib/askMode'
 import { routeLabel } from '../lib/trace'
 import { watchPath } from '../lib/timeParam'
 import styles from './Ask.module.css'
@@ -143,6 +145,8 @@ export default function Ask() {
                           ))}
                         </ul>
                       )}
+                      <AnswerActions text={m.text} citations={m.citations} canRegenerate={!chat.pending && !blocked}
+                        onRegenerate={() => chat.regenerate(m.id)} />
                       <AgentTrace steps={m.trace} running={false} />
                       {m.usage && m.usage.llmCalls > 0 && (
                         <p className={styles.meta}>
@@ -155,6 +159,17 @@ export default function Ask() {
               ),
             )}
             <div ref={endRef} />
+          </div>
+
+          <div className={styles.options}>
+            <label className={styles.style}>
+              <span>Answer style</span>
+              <select className={`input ${styles.select}`} value={chat.mode} onChange={(e) => chat.setMode(parseAskMode(e.target.value))}
+                aria-describedby="ask-style-hint">
+                {ASK_MODE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+            </label>
+            <span id="ask-style-hint" className={styles.styleHint}>{ASK_MODE_OPTIONS.find((o) => o.value === chat.mode)?.hint}</span>
           </div>
 
           <form className={styles.composer} onSubmit={submit}>

@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
 import { api } from '../api'
 import { ApiError, describeError } from '../api/errors'
+import { ASK_MODE_STORAGE_KEY, parseAskMode } from '../lib/askMode'
+import type { AskMode } from '../lib/askMode'
 import { parseAskEvent } from '../lib/askStream'
 import {
   CHAT_STORAGE_KEY, SESSION_STORAGE_KEY, chatReducer, isPending, isValidSessionId, newSessionId, restoreMessages, serializeMessages,
@@ -25,6 +27,14 @@ function loadInitial(): ChatState {
     return { messages: restoreMessages(sessionStorage.getItem(CHAT_STORAGE_KEY)) }
   } catch {
     return { messages: [] } // storage blocked (private mode, disabled cookies)
+  }
+}
+
+function loadMode(): AskMode {
+  try {
+    return parseAskMode(localStorage.getItem(ASK_MODE_STORAGE_KEY))
+  } catch {
+    return 'auto'
   }
 }
 
@@ -57,6 +67,9 @@ export function useChat() {
   const controllers = useRef(new Map<string, AbortController>())
   const sessionId = useRef<string>('')
   if (!sessionId.current) sessionId.current = loadSessionId()
+  const [mode, setModeState] = useState<AskMode>(loadMode) // how to answer: automatic, quick (RAG) or research (agent)
+  const modeRef = useRef(mode)
+  modeRef.current = mode
   const [blockedUntil, setBlockedUntil] = useState<number | null>(null)
   const secondsBlocked = useCountdown(blockedUntil)
 
@@ -86,7 +99,7 @@ export function useChat() {
       timedOut = true
       controller.abort()
     }, ASK_TIMEOUT_MS)
-    const params = new URLSearchParams({ q: question, mode: 'auto', session_id: sessionId.current })
+    const params = new URLSearchParams({ q: question, mode: modeRef.current, session_id: sessionId.current })
 
     api
       .stream(`/api/ask/stream?${params}`, {
@@ -142,6 +155,23 @@ export function useChat() {
     run(id, m.question)
   }, [run])
 
+  /** Asks the same question again (the previous answer is replaced). */
+  const regenerate = useCallback((id: string) => {
+    const m = stateRef.current.messages.find((x) => x.id === id)
+    if (!m || m.role !== 'assistant' || m.status !== 'done' || controllers.current.size > 0 || isPending(stateRef.current)) return
+    dispatch({ type: 'regenerate', id })
+    run(id, m.question)
+  }, [run])
+
+  const setMode = useCallback((next: AskMode) => {
+    setModeState(next)
+    try {
+      localStorage.setItem(ASK_MODE_STORAGE_KEY, next)
+    } catch {
+      /* not remembered, but it applies now */
+    }
+  }, [])
+
   /** Cancels the pending question and returns its text so it can go back into the input box. */
   const cancel = useCallback((id: string): string => {
     const m = stateRef.current.messages.find((x) => x.id === id)
@@ -164,5 +194,5 @@ export function useChat() {
     api.request(`/api/ask/session/${old}`, { method: 'DELETE' }).catch(() => undefined) // best effort: it expires on its own anyway
   }, [])
 
-  return { messages: state.messages, pending: isPending(state), secondsBlocked, send, retry, cancel, clear }
+  return { messages: state.messages, pending: isPending(state), secondsBlocked, mode, setMode, send, retry, regenerate, cancel, clear }
 }

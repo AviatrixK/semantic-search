@@ -37,10 +37,12 @@ export interface SearchHit {
   start_sec: number
   end_sec: number
   text: string
-  /** Cosine similarity, 0..1. */
+  /** Cosine similarity, 0..1 (keyword mode: a 0..1 keyword relevance). */
   score: number
   /** The sentence of `text` that best matches the query (a substring of it), or null. */
   highlight: string | null
+  /** Hybrid mode only: which searches returned it ("vector", "keyword"). */
+  found_by?: string[] | null
 }
 
 /** One transcript chunk (~30 s windows that overlap their neighbours by several seconds). */

@@ -58,13 +58,16 @@ refresh-token cookie is same-origin. Pages: Log in, Register, Home (placeholder)
 `npm run typecheck`, `npm run build`, `npm test` (client logic: refresh single-flight, 429 handling, two-tab safety, upload queue,
 job polling, formatting).
 
-**Search** (`/`): type and results appear after a short pause (or press Enter). Each result shows the video, the time range, the
-matching sentence in bold and a subtle similarity bar. Click a result, or use the arrow keys and Enter, to play the video at that moment
-in the sticky player (it stacks above the results on a phone). The query is kept in the address (`/?q=...`), so reload, back and sharing
-work. **Library** (`/library`) lists the ready videos. **Watch** (`/watch/<id>?t=123`) plays a video with its full transcript: click a
-line to jump there, the line being spoken is highlighted and followed (scroll by hand to pause that, "Follow playback" resumes it). `t`
-accepts seconds, `2:03` or `1m30s`, and "Copy link to this moment" builds such a link. The browser plays the video straight from storage
-through a presigned URL, so `S3_PUBLIC_ENDPOINT` must be reachable from the browser (it is `http://localhost:9000` by default).
+The app is laid out like a video site, in a plain light theme, and is meant for learning. **Home** (`/`) is a grid of the videos (thumbnails are real frames
+from the video) with Newest / Oldest / Longest / Shortest chips. Type in the **search box in the header** and press Enter (press `/` anywhere to jump to
+it): **results** (`/search?q=...`) are listed like YouTube search results, each with the frame where the match starts, the matching sentence in bold and a
+"Jump to 4:43" chip; clicking one opens the video at that moment. Above the results pick **Best match / Meaning / Exact words** and filter by video or
+upload date (all kept in the address, e.g. `/search?q=pauses&mode=keyword`). The **watch page** (`/watch/<id>?t=123`) has a big player with the
+transcript beside it: click a line to jump there, the spoken line is highlighted and followed (scroll by hand to pause that, "Follow playback"
+resumes it). `t` accepts seconds, `2:03` or `1m30s`, and "Copy link to this moment" builds such a link. The browser plays the video straight from storage
+through a presigned URL, so `S3_PUBLIC_ENDPOINT` must be reachable from the browser (it is `http://localhost:9000` by default). The round avatar (top right)
+opens a menu with the dark-mode switch and Log out; the hamburger collapses the left menu. **Ask** has an answer style (Automatic, Quick, Research), and
+each answer can be copied or regenerated. **Library** (`/library`) lists the ready videos.
 
 **Admin page** (`/admin`, admins only): drag-and-drop or pick several videos, edit titles, upload them one after another with a progress
 bar, and watch each one's processing live (stage and progress, polled every 2 seconds, error text on failure). The library table shows

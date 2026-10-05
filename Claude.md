@@ -121,7 +121,7 @@ and jump to timestamps; a Gemini tool-calling agent answers multi-step questions
   .mkv and the backend answers 415. Client-side size/type checks use `VITE_MAX_UPLOAD_MB` (default 500): keep it equal to the backend's
   `MAX_UPLOAD_MB`. `Video.status` "uploaded" means stored and waiting for / in processing (UI badge "Processing"); the table refreshes
   itself every 5 s while any video is processing. `GET /api/videos` returns `created_at`.
-- **Search UX (`/`), Library (`/library`), Watch (`/watch/:videoId?t=`).** Search is a debounced (400 ms), cancellable combobox:
+- **Search UX (now `/search`, see the redesign bullet; the combobox/debounce below is the searcher's logic), Library (`/library`), Watch (`/watch/:videoId?t=`).** Search is a debounced (400 ms), cancellable combobox:
   `lib/searcher.ts` (one request per pause, newer queries abort older ones, unchanged queries are not repeated, queries < 2 chars never
   hit the server); focus stays in the box, arrows move `aria-activedescendant`, Enter plays the selected result or searches. The query
   lives in `?q=`. A 429 shows a countdown and retries once automatically. `VideoPlayer` takes a `SeekRequest {videoId, t, play, nonce}`:
@@ -163,6 +163,18 @@ and jump to timestamps; a Gemini tool-calling agent answers multi-step questions
   token budget in Redis (`services/usage.py`, fail-open), last 3 Q/A turns per chat session held SERVER-side (`services/memory.py`, keyed
   by user + client session id). Frontend: `lib/sse.ts` parser, `lib/askStream.ts`, `lib/trace.ts`, `components/AgentTrace.tsx`.
   Not yet done: a real Gemini call and a real-browser E2E of the live trace (unit + fake-server verified only).
+- **Frontend redesign (YouTube-style, LIGHT by default).** Shell: sticky `Header` (menu button, logo, search box, avatar `AccountMenu`) + `Sidebar`
+  (full / icon rail via the hamburger, remembered in `svs.sidebar`; a bottom bar on phones) + page. Routes: `/` Home (thumbnail grid + sort chips;
+  an old `/?q=` link redirects), `/search?q&mode&video&after` (YouTube-style result rows; the header box is the only search input, Enter submits,
+  `/` focuses it everywhere), `/watch/:id?t=` (big player + transcript panel), `/ask`, `/library`, `/admin`. Result thumbnails and cards are the
+  video itself: `VideoThumb` is a muted `<video preload="metadata" src="<presigned>#t=<moment>">` created only when near the screen (no thumbnail
+  files). Theme: light by default, dark only by choice (`lib/theme.ts`, `svs.theme`, applied by an inline script in `index.html`); the OS dark
+  setting is IGNORED on purpose; dark tokens are the `[data-theme='dark']` block in `index.css`. NO background doodles/patterns (removed on request): plain `--bg`. The product is for education: the logo is a
+  graduation cap (no YouTube-like logo or red play button anywhere); the brand colour is indigo `--brand`. Search state: `lib/searchParams.ts` (validated URL <-> filters), `createSearcher` takes filters
+  (`setFilters` searches at once; `filtersKey` drops stale responses). Ask: answer style auto|rag|agent (`svs.ask.mode`), Copy answer, Regenerate
+  (the server memory records the repeat as another turn). A11y/speed: skip link, page title + live region per route (`lib/titles.ts`), Ask/Watch/Admin
+  are `React.lazy` with navbar prefetch and `RouteErrorBoundary`, skeletons, reduced motion, 44px targets on coarse pointers. Verified with headless
+  Edge against a throwaway mock backend serving a real sample video. NOT done: an in-chat video filter (no such backend parameter).
 - **Verifying a model wrapper without the real service:** run the REAL SDK inside the api container against a tiny local fake Gemini HTTP
   server (`http_options={"base_url": ...}`): it exercised request body, header, usage parsing, real 429/503/400/404 error classes and the
   timeout path with zero Google traffic.
