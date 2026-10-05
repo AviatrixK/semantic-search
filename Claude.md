@@ -87,6 +87,18 @@ and jump to timestamps; a Gemini tool-calling agent answers multi-step questions
   that starts mid-sentence still yields a lowercase first fragment: its own text cannot complete it. **Changing the splitter makes
   stored `chunk_sentences` stale (search then falls back to slow on-the-fly embedding): re-run `backfill_sentences`, which rebuilds
   stale rows too, and restart the worker.**
+- **Hybrid search (Phase 11).** `/api/search?mode=hybrid|vector|keyword` (default hybrid) and the agent's `search_transcripts` use
+  `retrieval.hybrid_search`: top `HYBRID_CANDIDATES` (30) of vector (after the MIN_SCORE cut) and keyword (`tsv @@ websearch_to_tsquery`,
+  `ts_rank_cd`, no cosine cut) fused by `search_logic.rrf_merge` (k=`RRF_K`=60), dedupe by `rrf`, optional `services/rerank.py` cross-encoder
+  (`RERANK`, default off, model loaded lazily once, failure -> fused order). `score` is always cosine (the UI shows it); keyword-only mode
+  uses rank/(1+rank). `/api/ask` rag and the "search" route still use `vector_search` on purpose (not asked to change). Keyword terms are
+  ANDed, so long natural-language questions often get 0 keyword hits and hybrid then equals vector. No schema change (tsv + GIN already existed).
+- **Eval harness (Phase 12, `backend/eval/`, see its README).** Gold file `eval/queries.jsonl` (hand-labelled by the developer: NEVER invent
+  gold entries; for pipeline smoke tests build a throwaway file from chunk text under /tmp). Same query text on several lines = one query with
+  several gold ranges. `metrics.py` is pure (tested in `tests/test_eval_metrics.py`); `run_eval.py` (vector/keyword/hybrid/hybrid+rerank,
+  Recall@1/@5, MRR, median warm latency, silently-falling-back reranker is reported as skipped, not as a result); `run_answer_eval.py` (rag vs
+  agent on `multi`, Gemini judge, citation precision; makes REAL Gemini calls and asks first; never run it without the user's go-ahead);
+  `add_query.py` (interactive labelling). Run inside the api container. On Git Bash set `MSYS_NO_PATHCONV=1` when passing /tmp paths.
 - **pgvector HNSW gotcha:** it returns at most `hnsw.ef_search` (default 40) rows regardless of LIMIT and applies WHERE filters after
   the index scan; `vector_search` does `SET LOCAL hnsw.ef_search` to cover its candidate limit.
 - **Frontend (`frontend/`, run with `npm run dev` on the host, NOT in Docker; no frontend compose service: node image is a big
@@ -140,6 +152,17 @@ and jump to timestamps; a Gemini tool-calling agent answers multi-step questions
   `VideoPlayer`. `lib/chat.ts` is the pure state machine (one pending question, cancel removes it and returns the text to the box, retry);
   the conversation lives in `sessionStorage` (this tab only; a request that was pending when the page went away comes back as a retryable
   error). 429 blocks sending until Retry-After; client gives up after 100 s. Enter sends, Shift+Enter is a new line.
+- **Agent / router / SSE / guardrails (Phases 9-10).** `app/agent/`: `loop.py` (hand-rolled: model -> tool calls (parallel) -> results in ONE
+  turn -> repeat; after `max_steps` one forced final call with tool mode NONE, so calls <= max_steps+1), `tools.py` (Pydantic-validated
+  args, bad args return an error string to the model, results truncated to a token budget BEFORE they count as evidence), `citations.py`
+  (model cites `[video_id@seconds]`; only refs inside ranges tools actually returned survive, renumbered to `[n]`), `router.py` (heuristics
+  first, tiny LLM call only when ambiguous, failure -> rag), `orchestrator.py`. `POST /api/ask` takes `mode` rag|agent|auto|search and
+  returns `route`, `trace`, `usage`; `GET /api/ask/stream` is SSE (events route, step_start, step_result, answer, error, done; auth via
+  bearer through fetch, never EventSource; pre-stream failures are real 401/422/429). Client disconnect stops the agent before its next
+  model call. Guardrails: transcript text is wrapped as untrusted data (`services/safety.py`), per-request LLM call cap, per-user daily
+  token budget in Redis (`services/usage.py`, fail-open), last 3 Q/A turns per chat session held SERVER-side (`services/memory.py`, keyed
+  by user + client session id). Frontend: `lib/sse.ts` parser, `lib/askStream.ts`, `lib/trace.ts`, `components/AgentTrace.tsx`.
+  Not yet done: a real Gemini call and a real-browser E2E of the live trace (unit + fake-server verified only).
 - **Verifying a model wrapper without the real service:** run the REAL SDK inside the api container against a tiny local fake Gemini HTTP
   server (`http_options={"base_url": ...}`): it exercised request body, header, usage parsing, real 429/503/400/404 error classes and the
   timeout path with zero Google traffic.

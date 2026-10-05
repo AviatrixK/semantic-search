@@ -6,4 +6,4 @@ export const api = createApiClient({
   runExclusive: webLocksRunner(),
 })
 
-export type { AskOut, Chunk, Citation, Job, SearchHit, StreamOut, TokenOut, UploadOut, User, Video } from './types'
+export type { AskOut, Chunk, Citation, Job, SearchHit, StreamOut, TokenOut, TraceStepOut, UploadOut, User, Video } from './types'

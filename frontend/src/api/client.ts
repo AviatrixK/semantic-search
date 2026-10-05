@@ -1,3 +1,5 @@
+import { createSseParser } from '../lib/sse.js'
+import type { SseEvent } from '../lib/sse.js'
 import { ApiError, NetworkError, detailMessage, parseRetryAfter } from './errors.js'
 
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>
@@ -44,6 +46,12 @@ export interface UploadOptions {
   signal?: AbortSignal
 }
 
+export interface StreamOptions {
+  /** Called for every complete Server-Sent Event as it arrives. */
+  onEvent: (event: SseEvent) => void
+  signal?: AbortSignal
+}
+
 export interface ApiClient {
   getToken(): string | null
   setToken(token: string | null): void
@@ -55,6 +63,12 @@ export interface ApiClient {
   request<T = unknown>(path: string, options?: RequestOptions): Promise<T>
   /** POST a FormData with upload progress (fetch cannot report upload progress, XMLHttpRequest can). */
   upload<T = unknown>(path: string, form: FormData, options?: UploadOptions): Promise<T>
+  /**
+   * GET a Server-Sent Events stream with the bearer token. (EventSource cannot send an Authorization header, so this is fetch +
+   * ReadableStream.) Problems BEFORE the stream starts (401 -> refresh and retry, 429, 422...) are ordinary ApiErrors. Resolves when
+   * the server ends the stream; rejects with AbortError if aborted and NetworkError if the connection drops mid-stream.
+   */
+  stream(path: string, options: StreamOptions): Promise<void>
 }
 
 const AUTH_PATHS = ['/auth/login', '/auth/register', '/auth/refresh', '/auth/logout']
@@ -233,6 +247,25 @@ export function createApiClient(options: ClientOptions = {}): ApiClient {
     },
     async upload<T>(path: string, form: FormData, o: UploadOptions = {}) {
       return parse<T>(await withAuthRetry(path, (t) => sendXhr(path, form, t, o)))
+    },
+    async stream(path: string, o: StreamOptions) {
+      const res = await withAuthRetry(path, (t) => send(path, { headers: { Accept: 'text/event-stream' }, signal: o.signal }, t))
+      if (!res.body) throw new NetworkError('This browser cannot read streamed responses')
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder() // stream: true below, so a character split across chunks is not corrupted
+      const parser = createSseParser(o.onEvent)
+      try {
+        for (;;) {
+          const { done, value } = await reader.read()
+          if (done) break
+          parser.push(decoder.decode(value, { stream: true }))
+        }
+        parser.push(decoder.decode())
+        parser.end()
+      } catch (e) {
+        if (e instanceof DOMException && e.name === 'AbortError') throw e
+        throw new NetworkError('The connection was interrupted')
+      }
     },
   }
 }

@@ -56,6 +56,13 @@ os.environ.update({
     "LLM_MAX_RETRIES": "2",
     "LLM_MAX_OUTPUT_TOKENS": "256",
     "RAG_TOP_K": "8",
+    "AGENT_MAX_STEPS": "6",
+    "AGENT_MAX_LLM_CALLS": "8",
+    "AGENT_TOOL_RESULT_TOKENS": "1500",
+    "DAILY_TOKEN_BUDGET": "50000",
+    "CHAT_MEMORY_TURNS": "3",
+    "CHAT_MEMORY_TTL_SEC": "3600",
+    "SSE_KEEPALIVE_SEC": "0.2",
     "GEMINI_API_KEY": "",
 })
 

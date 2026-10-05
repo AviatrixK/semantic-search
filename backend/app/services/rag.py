@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.services import retrieval
 from app.services.llm import LLM, get_llm
+from app.services.safety import sanitize_untrusted
 
 NO_CONTEXT_ANSWER = "I couldn't find anything in the videos that relates to that question."
 INSUFFICIENT_ANSWER = "I don't have enough information in the videos to answer that."
@@ -54,7 +55,9 @@ def mmss(seconds: float) -> str:
 
 
 def _one_line(text: str) -> str:
-    return " ".join(text.split())
+    """One line, and safe to put inside the <excerpts>/<question> tags: angle brackets are neutralised so transcript text
+    can never close a tag and escape the block it is meant to stay in (prompt-injection hygiene, see services/safety.py)."""
+    return sanitize_untrusted(text)
 
 
 def sources_from_hits(hits: list[dict]) -> list[Source]:

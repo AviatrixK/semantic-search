@@ -1,11 +1,14 @@
 """Thin wrapper over google-genai: timeout, retries on 429/5xx with backoff, token-usage logging, and an interface that
-tests (and later the agent) can replace with a fake. Nothing here knows about videos or prompts."""
+tests (and the agent) can replace with a fake. Nothing here knows about videos or prompts.
+
+Two calls: generate() is one question in, one text out (RAG, router). generate_turn() is one step of a tool-calling
+conversation: provider-neutral messages and tool specs in, either text or tool calls out."""
 import logging
 import random
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
-from typing import Callable, Protocol, TypeVar
+from typing import Any, Callable, Protocol, TypeVar
 
 from app.core.config import settings
 
@@ -43,6 +46,7 @@ class LLMEmptyResponse(LLMError):
     user_message = "The model did not return an answer. Please try rephrasing the question."
 
 
+# ---- results and provider-neutral conversation types
 @dataclass(frozen=True)
 class LLMResult:
     text: str
@@ -55,8 +59,71 @@ class LLMResult:
     latency_ms: int = 0
 
 
+@dataclass(frozen=True)
+class ToolSpec:
+    """A function the model may call. `parameters` is a plain JSON Schema object."""
+    name: str
+    description: str
+    parameters: dict
+
+
+@dataclass(frozen=True)
+class ToolCall:
+    name: str
+    args: dict
+    id: str | None = None
+
+
+@dataclass(frozen=True)
+class ToolResponse:
+    """The answer to one ToolCall (same name/id). `content` must be a JSON-able dict."""
+    name: str
+    content: dict
+    id: str | None = None
+
+
+@dataclass(frozen=True)
+class UserMsg:
+    text: str
+
+
+@dataclass(frozen=True)
+class ModelMsg:
+    text: str | None = None
+    tool_calls: tuple[ToolCall, ...] = ()
+    # The provider's own object for this turn. It is sent back unchanged: Gemini thinking models attach "thought
+    # signatures" to function calls and require them in the history of the next request.
+    raw: Any = field(default=None, compare=False, repr=False)
+
+
+@dataclass(frozen=True)
+class ToolMsg:
+    """All results for the tool calls of ONE model turn, in the same order as the calls."""
+    responses: tuple[ToolResponse, ...]
+
+
+Message = UserMsg | ModelMsg | ToolMsg
+
+
+@dataclass(frozen=True)
+class TurnResult:
+    text: str | None
+    tool_calls: tuple[ToolCall, ...]
+    raw: Any = field(default=None, compare=False, repr=False)
+    model: str = ""
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    thought_tokens: int | None = None
+    total_tokens: int | None = None
+    attempts: int = 1
+    latency_ms: int = 0
+
+
 class LLM(Protocol):
     def generate(self, *, system: str, prompt: str) -> LLMResult: ...
+
+    def generate_turn(self, *, system: str, messages: list[Message], tools: list[ToolSpec] | None = None,
+                      allow_tools: bool = True) -> TurnResult: ...
 
 
 # ---- retries
@@ -128,18 +195,21 @@ class GeminiLLM:
             self._client = genai.Client(api_key=self._api_key)
         return self._client
 
-    def generate(self, *, system: str, prompt: str) -> LLMResult:
-        client = self._get_client()
-        config = {  # a plain dict is accepted by the SDK, so this module needs no SDK types
+    def _base_config(self, system: str) -> dict:
+        return {  # a plain dict is accepted by the SDK, so this module needs no SDK types
             "system_instruction": system,
             "temperature": 0.2,  # answers must stay close to the excerpts
             "max_output_tokens": self._max_output_tokens,  # includes thinking tokens on thinking models
             "http_options": {"timeout": int(self._timeout_sec * 1000)},  # the SDK takes milliseconds
         }
+
+    def _invoke(self, contents, config: dict):
+        """One model call with retries and usage logging. Returns (response, attempts, latency_ms, usage tuple)."""
+        client = self._get_client()
         started = time.monotonic()
         try:
             response, attempts = call_with_retries(
-                lambda: client.models.generate_content(model=self.model, contents=prompt, config=config),
+                lambda: client.models.generate_content(model=self.model, contents=contents, config=config),
                 max_retries=self._max_retries, sleep=self._sleep, jitter=self._jitter,
             )
         except LLMError:
@@ -153,25 +223,83 @@ class GeminiLLM:
 
         latency_ms = int((time.monotonic() - started) * 1000)
         usage = getattr(response, "usage_metadata", None)
-        prompt_tokens = _count(usage, "prompt_token_count")
-        completion_tokens = _count(usage, "candidates_token_count")
-        thought_tokens = _count(usage, "thoughts_token_count")
-        total_tokens = _count(usage, "total_token_count")
+        counts = (_count(usage, "prompt_token_count"), _count(usage, "candidates_token_count"),
+                  _count(usage, "thoughts_token_count"), _count(usage, "total_token_count"))
         # Token counts only: never the prompt or the answer (they contain user questions and transcript text).
         log.info("llm: ok model=%s attempts=%d latency_ms=%d prompt_tokens=%s completion_tokens=%s thought_tokens=%s total_tokens=%s",
-                 self.model, attempts, latency_ms, prompt_tokens, completion_tokens, thought_tokens, total_tokens)
+                 self.model, attempts, latency_ms, *counts)
+        return response, attempts, latency_ms, counts
 
+    def _empty(self, response) -> LLMEmptyResponse:
+        candidates = getattr(response, "candidates", None) or []
+        reason = getattr(candidates[0], "finish_reason", None) if candidates else None
+        log.warning("llm: empty response model=%s finish_reason=%s", self.model, reason)
+        return LLMEmptyResponse(f"empty response, finish_reason={reason}")
+
+    def generate(self, *, system: str, prompt: str) -> LLMResult:
+        response, attempts, latency_ms, (p, c, th, tot) = self._invoke(prompt, self._base_config(system))
         try:
             text = (getattr(response, "text", None) or "").strip()
         except Exception:  # the SDK can raise when a response has no usable parts
             text = ""
         if not text:
-            candidates = getattr(response, "candidates", None) or []
-            reason = getattr(candidates[0], "finish_reason", None) if candidates else None
-            log.warning("llm: empty response model=%s finish_reason=%s", self.model, reason)
-            raise LLMEmptyResponse(f"empty response, finish_reason={reason}")
-        return LLMResult(text=text, model=self.model, prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
-                         thought_tokens=thought_tokens, total_tokens=total_tokens, attempts=attempts, latency_ms=latency_ms)
+            raise self._empty(response)
+        return LLMResult(text=text, model=self.model, prompt_tokens=p, completion_tokens=c, thought_tokens=th,
+                         total_tokens=tot, attempts=attempts, latency_ms=latency_ms)
+
+    # -- tool calling
+    @staticmethod
+    def _to_content(m: Message):
+        if isinstance(m, UserMsg):
+            return {"role": "user", "parts": [{"text": m.text}]}
+        if isinstance(m, ModelMsg):
+            if m.raw is not None:
+                return m.raw  # echo the model's own turn untouched (keeps thought signatures)
+            parts: list[dict] = [{"text": m.text}] if m.text else []
+            for c in m.tool_calls:
+                call = {"name": c.name, "args": c.args}
+                if c.id:
+                    call["id"] = c.id
+                parts.append({"function_call": call})
+            return {"role": "model", "parts": parts}
+        parts = []
+        for r in m.responses:
+            resp = {"name": r.name, "response": r.content}
+            if r.id:
+                resp["id"] = r.id
+            parts.append({"function_response": resp})
+        return {"role": "user", "parts": parts}  # Gemini expects function results in a user turn
+
+    @staticmethod
+    def _parse_turn(response) -> tuple[str | None, tuple[ToolCall, ...], Any]:
+        candidates = getattr(response, "candidates", None) or []
+        content = candidates[0].content if candidates else None
+        calls: list[ToolCall] = []
+        texts: list[str] = []
+        for part in (getattr(content, "parts", None) or []):
+            fc = getattr(part, "function_call", None)
+            if fc is not None and getattr(fc, "name", None):
+                calls.append(ToolCall(name=fc.name, args=dict(getattr(fc, "args", None) or {}), id=getattr(fc, "id", None)))
+            elif getattr(part, "text", None) and not getattr(part, "thought", False):
+                texts.append(part.text)
+        text = "".join(texts).strip() or None
+        return text, tuple(calls), content
+
+    def generate_turn(self, *, system: str, messages: list[Message], tools: list[ToolSpec] | None = None,
+                      allow_tools: bool = True) -> TurnResult:
+        config = self._base_config(system)
+        if tools:
+            config["tools"] = [{"function_declarations": [
+                {"name": t.name, "description": t.description, "parameters": t.parameters} for t in tools]}]  # plain OpenAPI-style schema
+            config["automatic_function_calling"] = {"disable": True}  # WE run the tools, so we can trace, cap and validate them
+            if not allow_tools:  # tools stay declared (the history contains calls) but the model must answer in text
+                config["tool_config"] = {"function_calling_config": {"mode": "NONE"}}
+        response, attempts, latency_ms, (p, c, th, tot) = self._invoke([self._to_content(m) for m in messages], config)
+        text, calls, raw = self._parse_turn(response)
+        if not text and not calls:
+            raise self._empty(response)
+        return TurnResult(text=text, tool_calls=calls, raw=raw, model=self.model, prompt_tokens=p, completion_tokens=c,
+                          thought_tokens=th, total_tokens=tot, attempts=attempts, latency_ms=latency_ms)
 
 
 # ---- the instance the app uses (replaceable)

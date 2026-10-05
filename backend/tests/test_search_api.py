@@ -36,9 +36,9 @@ def route_client():
     app.dependency_overrides[get_db] = lambda: MagicMock()
     app.dependency_overrides[current_user] = lambda: CurrentUser(id=str(uuid.uuid4()), role="user")
     app.dependency_overrides[search_rate_limit] = lambda: None
-    with patch.object(retrieval, "log_query"), patch.object(retrieval, "vector_search", return_value=[]) as vs:
+    with patch.object(retrieval, "log_query"), patch.object(retrieval, "vector_search", return_value=[]) as vs,             patch.object(retrieval, "keyword_search", return_value=[]) as ks,             patch.object(retrieval, "hybrid_search", return_value=[]) as hs:
         c = TestClient(app)
-        c.vs = vs
+        c.vector, c.keyword, c.hybrid = vs, ks, hs
         yield c
     app.dependency_overrides.clear()
 
@@ -49,14 +49,24 @@ def test_route_passes_filters_and_sets_timing_header(route_client):
     assert r.status_code == 200
     ms = float(r.headers["X-Search-Ms"])
     assert 0 <= ms < 5000
-    kwargs = route_client.vs.call_args.kwargs
+    kwargs = route_client.hybrid.call_args.kwargs
     assert kwargs["k"] == 5 and kwargs["video_id"] == vid and kwargs["highlight"] is False
     assert kwargs["uploaded_after"].isoformat() == "2024-01-02"
 
 
+def test_mode_picks_the_search_function_and_hybrid_is_the_default(route_client):
+    route_client.get("/api/search?q=hello")
+    assert route_client.hybrid.call_count == 1 and route_client.keyword.call_count == 0 and route_client.vector.call_count == 0
+    route_client.get("/api/search?q=hello&mode=keyword")
+    route_client.get("/api/search?q=hello&mode=vector")
+    route_client.get("/api/search?q=hello&mode=hybrid")
+    assert (route_client.keyword.call_count, route_client.vector.call_count, route_client.hybrid.call_count) == (1, 1, 2)
+    assert route_client.get("/api/search?q=hello&mode=bm25").status_code == 422
+
+
 def test_route_defaults_and_validation(route_client):
     assert route_client.get("/api/search?q=hello").status_code == 200
-    kwargs = route_client.vs.call_args.kwargs
+    kwargs = route_client.hybrid.call_args.kwargs
     assert kwargs["video_id"] is None and kwargs["uploaded_after"] is None and kwargs["highlight"] is True
     assert route_client.get("/api/search?q=hello&uploaded_after=not-a-date").status_code == 422
     assert route_client.get("/api/search?q=hello&video_id=nope").status_code == 422
@@ -89,6 +99,7 @@ def seeded(api, db_session):
         (v1, 3, 200, 230, 0.20, "Completely unrelated rambling."),  # below MIN_SCORE
         (v1, 4, 300, 330, 0.50, "A single sentence chunk with no punctuation break"),
         (v2, 0, 0, 30, 0.60, "Old video about robots. Nothing else."),
+        (v1, 5, 400, 430, 0.10, "The chef Zorblax grilled the fish."),  # a rare word; its embedding is far from QUERY
     ]
     chunks = [Chunk(id=uuid.uuid4(), video_id=v.id, idx=i, start_sec=s, end_sec=e, text=t, embedding=vec(score))
               for v, i, s, e, score, t in rows]
@@ -206,3 +217,81 @@ def seeded_db_count(api):
     from app.core.db import engine
     with engine.connect() as conn:
         return conn.execute(text("SELECT count(*) FROM search_logs WHERE mode='search'")).scalar()
+
+
+# ---------------------------------------------------------------- vector / keyword / hybrid
+def starts(hits):
+    return [(h["title"], h["start_sec"]) for h in hits]
+
+
+def test_keyword_mode_finds_an_exact_rare_word_that_vector_mode_misses(seeded):
+    vector = seeded.get("/api/search?q=Zorblax&mode=vector").json()
+    assert ("Public speaking", 400) not in starts(vector)  # embedding is below MIN_SCORE: semantic search cannot see it
+    keyword = seeded.get("/api/search?q=Zorblax&mode=keyword").json()
+    assert starts(keyword) == [("Public speaking", 400)]
+    hybrid = seeded.get("/api/search?q=Zorblax").json()  # the default
+    assert ("Public speaking", 400) in starts(hybrid)
+    hit = next(h for h in hybrid if h["start_sec"] == 400)
+    assert hit["found_by"] == ["keyword"] and hit["rrf"] > 0
+    assert hit["score"] == pytest.approx(0.1, abs=1e-3)  # score stays the cosine similarity the UI shows
+
+
+def test_hybrid_keeps_the_semantic_results_and_marks_chunks_both_searches_found(seeded):
+    hybrid = seeded.get("/api/search?q=robots&video_id=" + str(seeded.v1.id)).json()
+    vector = seeded.get("/api/search?q=robots&mode=vector&video_id=" + str(seeded.v1.id)).json()
+    assert {x for x in starts(vector)} <= {x for x in starts(hybrid)}  # nothing semantic was lost
+    top = hybrid[0]
+    assert top["start_sec"] == 0 and top["found_by"] == ["vector", "keyword"]  # "robots" is said there AND it is closest
+    assert next(h for h in hybrid if h["start_sec"] == 50)["found_by"] == ["vector"]  # semantic only
+    assert [h["rrf"] for h in hybrid] == sorted((h["rrf"] for h in hybrid), reverse=True)
+
+
+def test_keyword_mode_stems_supports_phrases_and_exclusion(seeded):
+    assert ("Public speaking", 0) in starts(seeded.get("/api/search?q=robot&mode=keyword").json())  # robot -> robots
+    assert starts(seeded.get('/api/search?q="teach us"&mode=keyword').json()) == [("Public speaking", 0)]
+    only_old = seeded.get("/api/search?q=robots+-teach&mode=keyword").json()
+    assert starts(only_old) == [("Old talk", 0)]
+
+
+def test_keyword_mode_dedupes_overlap_and_applies_filters(seeded):
+    hits = seeded.get("/api/search?q=thank+you&mode=keyword").json()
+    assert starts(hits) in ([("Public speaking", 0)], [("Public speaking", 25)])  # idx 0 and 1 overlap: one survives
+    assert seeded.get("/api/search?q=robots&mode=keyword&uploaded_after=2021-01-01").json()         and {h["title"] for h in seeded.get("/api/search?q=robots&mode=keyword&uploaded_after=2021-01-01").json()} == {"Public speaking"}
+    assert [h["title"] for h in seeded.get(f"/api/search?q=robots&mode=keyword&video_id={seeded.v2.id}").json()] == ["Old talk"]
+
+
+def test_keyword_mode_with_no_match_or_only_stop_words_returns_nothing_and_never_errors(seeded):
+    for q in ["xyzzyplugh", "the and of", "!!! ???", "a'b\"c ((", "robots OR"]:
+        r = seeded.get("/api/search", params={"q": q, "mode": "keyword"})
+        assert r.status_code == 200, q
+    assert seeded.get("/api/search?q=xyzzyplugh&mode=keyword").json() == []
+    assert seeded.get("/api/search?q=the+and+of&mode=keyword").json() == []
+
+
+def test_keyword_mode_without_highlight_never_touches_the_model(seeded):
+    with patch.object(retrieval, "embed_query", side_effect=AssertionError("no embedding needed")):
+        hits = seeded.get("/api/search?q=robots&mode=keyword&highlight=false").json()
+    assert hits and all(h["highlight"] is None for h in hits)
+    assert all(h["score"] <= 1 for h in hits)  # keyword relevance squashed into 0..1
+
+
+def test_hybrid_respects_k_and_highlight(seeded):
+    assert len(seeded.get("/api/search?q=robots&k=1").json()) == 1
+    hits = seeded.get(f"/api/search?q=robots&video_id={seeded.v1.id}").json()
+    assert next(h for h in hits if h["start_sec"] == 0)["highlight"] == "Robots can teach us how to live."
+
+
+def test_hybrid_rerank_flag_reorders_with_the_cross_encoder(seeded, monkeypatch):
+    monkeypatch.setattr(settings, "RERANK", True)
+    from app.services import rerank
+    monkeypatch.setattr(rerank, "score_pairs", lambda q, texts: [float(len(t)) for t in texts])  # longest text wins
+    hits = seeded.get(f"/api/search?q=robots&video_id={seeded.v1.id}&highlight=false").json()
+    assert hits and all(h["rerank_score"] is not None for h in hits)
+    assert [h["rerank_score"] for h in hits] == sorted((h["rerank_score"] for h in hits), reverse=True)
+
+
+def test_rerank_off_by_default_never_loads_the_model(seeded, monkeypatch):
+    from app.services import rerank
+    monkeypatch.setattr(rerank, "_model", lambda: (_ for _ in ()).throw(AssertionError("model must not load")))
+    hits = seeded.get("/api/search?q=robots").json()
+    assert hits and all(h["rerank_score"] is None for h in hits)
