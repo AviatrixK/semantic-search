@@ -10,7 +10,7 @@ from celery.utils.log import get_task_logger
 
 from app.core.db import SessionLocal
 from app.models import Chunk, Job, Video
-from app.services import chunking, embedding, media, sentences, storage, tokens, transcription
+from app.services import chunking, embedding, jobevents, media, sentences, storage, tokens, transcription
 from app.workers.celery_app import celery
 
 log = get_task_logger(__name__)
@@ -26,6 +26,7 @@ def _set(db, job_id, stage, progress, error=None):
     job = db.get(Job, uuid.UUID(job_id))
     job.stage, job.progress, job.error = stage, progress, error
     db.commit()
+    jobevents.publish(jobevents.payload(job_id, job.video_id, stage, progress, error))  # after the commit: never announce unsaved state
 
 
 def is_transient(exc: BaseException) -> bool:
@@ -75,6 +76,22 @@ def _fail(db, video_id, job_id, message):
         db.commit()
 
 
+def _store_faststart(video, src: str, tmp: str, job_id: str) -> None:
+    """MP4/MOV with the index at the end make the browser fetch the end of the file before it can play. Remux (stream copy,
+    no re-encode) and replace the stored object in place. Best effort: the original plays fine, only slower to start, so a
+    problem here is logged and never fails the job (scripts/remux_faststart.py can retry it later)."""
+    try:
+        if not media.needs_faststart(src):
+            return
+        ext = src.rsplit(".", 1)[-1].lower()
+        out = media.remux_faststart(src, os.path.join(tmp, f"faststart.{ext}"))
+        with open(out, "rb") as f:
+            storage.upload_fileobj(f, video.storage_key, media.FASTSTART_TYPES[ext])
+        log.info("job %s: stored a faststart copy of %s", job_id, video.storage_key)
+    except Exception as exc:
+        log.warning("job %s: faststart remux skipped (%s: %s)", job_id, type(exc).__name__, getattr(exc, "raw", exc))
+
+
 def _ingest(db, video_id, job_id):
     video = db.get(Video, uuid.UUID(video_id))
     if video is None:  # deleted while queued
@@ -87,6 +104,7 @@ def _ingest(db, video_id, job_id):
         _set(db, job_id, "extracting", 10)
         wav = media.extract_audio(src, os.path.join(tmp, "audio.wav"))  # raises NoAudioStreamError / MediaError
         video.duration_sec = media.duration_sec(src)
+        _store_faststart(video, src, tmp, job_id)
 
         _set(db, job_id, "transcribing", 25)
         segments, lang = transcription.transcribe(wav, on_progress=progress_reporter(db, job_id))

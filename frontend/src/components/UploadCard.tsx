@@ -9,13 +9,14 @@ interface Props {
   item: QueueItem
   onCancel: (id: string) => void
   onDismiss: (id: string) => void
-  onJobFinished: (job: Job) => void
+  /** Live state of this item's job (from the job feed), once known. */
+  job?: Job
 }
 
 /** One card per queued upload: waiting -> uploading (bytes) -> processing (live job status) or error. */
-export default function UploadCard({ item, onCancel, onDismiss, onJobFinished }: Props) {
+export default function UploadCard({ item, onCancel, onDismiss, job }: Props) {
   if (item.phase === 'processing' && item.jobId) {
-    return <JobStatus jobId={item.jobId} title={item.title} onFinished={onJobFinished} onDismiss={() => onDismiss(item.id)} />
+    return <JobStatus job={job} title={item.title} onDismiss={() => onDismiss(item.id)} />
   }
 
   const pct = item.total > 0 ? Math.round((item.loaded / item.total) * 100) : 0

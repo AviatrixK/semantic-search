@@ -1,4 +1,5 @@
 import json
+import os
 import shutil
 import subprocess
 
@@ -62,3 +63,50 @@ def duration_sec(path: str) -> int:
         return int(float(json.loads(out)["format"]["duration"]))
     except (KeyError, ValueError, TypeError) as e:  # ffprobe succeeded but found no usable duration
         raise MediaError(f"ffprobe returned no duration: {out[:200]}", raw=out) from e
+
+
+# ---- faststart: put the MP4 "moov" index at the start of the file so a browser can play without first reading the end.
+FASTSTART_TYPES = {"mp4": "video/mp4", "m4v": "video/mp4", "mov": "video/quicktime"}  # webm/mkv have no moov atom
+
+
+def moov_before_mdat(path: str) -> bool | None:
+    """Walks the top-level MP4/MOV boxes (reads only their 8-16 byte headers). True: the index comes before the media data
+    (already faststart). False: the media data comes first, so players must seek to the end for the index. None: neither
+    box was found (not an MP4-family file)."""
+    size_total = os.path.getsize(path)
+    pos = 0
+    with open(path, "rb") as f:
+        while pos + 8 <= size_total:
+            f.seek(pos)
+            header = f.read(8)
+            size, kind = int.from_bytes(header[:4], "big"), header[4:8]
+            if size == 1:  # 64-bit size follows
+                size = int.from_bytes(f.read(8), "big")
+            elif size == 0:  # the box runs to the end of the file
+                size = size_total - pos
+            if kind == b"moov":
+                return True
+            if kind == b"mdat":
+                return False
+            if size < 8:
+                return None
+            pos += size
+    return None
+
+
+def needs_faststart(path: str) -> bool:
+    """True only for an MP4-family file whose media data precedes its index."""
+    ext = path.rsplit(".", 1)[-1].lower()
+    return ext in FASTSTART_TYPES and moov_before_mdat(path) is False
+
+
+def remux_faststart(src: str, dst: str) -> str:
+    """Copies the streams (no re-encode, so no quality loss and seconds of work) into a new file whose index is first.
+    Keeps every video and audio stream; subtitle and data tracks are not carried over. Raises MediaError if ffmpeg fails
+    or the result is not actually faststart."""
+    _require("ffmpeg")
+    _run(["ffmpeg", "-y", "-loglevel", "error", "-i", src, "-map", "0:v", "-map", "0:a?", "-c", "copy",
+          "-movflags", "+faststart", dst])
+    if moov_before_mdat(dst) is not True:
+        raise MediaError("ffmpeg produced a file whose index is not at the start")
+    return dst

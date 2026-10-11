@@ -17,7 +17,7 @@ class NoSpeechError(Exception):
 @lru_cache
 def _model():
     from faster_whisper import WhisperModel  # heavy import: load once per process
-    return WhisperModel(settings.WHISPER_SIZE, device="auto", compute_type="int8")
+    return WhisperModel(settings.WHISPER_SIZE, device="auto", compute_type="int8", cpu_threads=max(1, settings.WHISPER_THREADS))
 
 
 def _load_wav(path: str) -> np.ndarray:

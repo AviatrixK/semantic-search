@@ -1,14 +1,17 @@
-import { useCallback, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { api } from '../api'
 import type { UploadOut, Video } from '../api'
 import { describeError } from '../api/errors'
 import ConfirmDialog from '../components/ConfirmDialog'
+import JobStatus from '../components/JobStatus'
 import Spinner from '../components/Spinner'
 import UploadCard from '../components/UploadCard'
 import UploadForm from '../components/UploadForm'
 import VideoTable from '../components/VideoTable'
+import { useJobFeed } from '../hooks/useJobFeed'
 import { useUploadQueue } from '../hooks/useUploadQueue'
 import { useVideos } from '../hooks/useVideos'
+import { hasActiveJob } from '../lib/jobFeed'
 import styles from './AdminVideos.module.css'
 
 const MAX_UPLOAD_MB = Number(import.meta.env.VITE_MAX_UPLOAD_MB) || 500 // keep equal to the backend's MAX_UPLOAD_MB
@@ -21,6 +24,20 @@ export default function AdminVideos() {
   const [toDelete, setToDelete] = useState<Video | null>(null)
   const [deleting, setDeleting] = useState(false)
 
+  // The live feed is open only while something is being processed: a video that is not "ready"/"failed" yet, a card waiting for
+  // its first event, or a job the feed reports as running. When the last one finishes this turns false and the connection closes.
+  const [watching, setWatching] = useState(false) // jobs this page started (uploads/reprocess) whose first event may still be on its way
+  const feed = useJobFeed(watching, { onFinished: () => void reload(), onResync: () => void reload() })
+  const processingVideos = videos?.some((v) => v.status === 'uploaded') ?? false
+  const waitingForFirstEvent = queue.items.some((i) => i.phase === 'processing' && i.jobId !== null && !(i.jobId in feed.jobs))
+  const active = processingVideos || waitingForFirstEvent || hasActiveJob(feed.jobs)
+  if (active !== watching) setWatching(active) // derived state: adjusting during render is the React-recommended form
+
+  // Jobs the feed knows about that have no upload card on this page (e.g. after a refresh): shown with the video's title.
+  const trackedJobIds = useMemo(() => new Set(queue.items.map((i) => i.jobId).filter(Boolean)), [queue.items])
+  const titleOf = (videoId: string) => videos?.find((v) => v.id === videoId)?.title ?? 'Video'
+  const otherJobs = Object.values(feed.jobs).filter((j) => !trackedJobIds.has(j.id))
+
   const setBusyFor = (id: string, on: boolean) =>
     setBusy((cur) => {
       const next = new Set(cur)
@@ -28,8 +45,6 @@ export default function AdminVideos() {
       else next.delete(id)
       return next
     })
-
-  const onJobFinished = useCallback(() => void reload(), [reload]) // refresh the table when a card reaches done/failed
 
   async function reprocess(video: Video) {
     setNotice(null)
@@ -77,13 +92,32 @@ export default function AdminVideos() {
         <UploadForm maxMb={MAX_UPLOAD_MB} onSubmit={queue.add} />
       </section>
 
-      {queue.items.length > 0 && (
+      {(queue.items.length > 0 || otherJobs.length > 0) && (
         <section aria-labelledby="jobs-heading" className={styles.section}>
           <h2 id="jobs-heading">Uploads and processing</h2>
+          {feed.status === 'reconnecting' && (
+            <p className={styles.empty} role="status">Live updates were interrupted. Reconnecting…</p>
+          )}
+          {feed.status === 'stopped' && (
+            <p className={styles.empty} role="status">Live updates are off for this session. Reload the page to see progress.</p>
+          )}
           <ul className={styles.cards}>
             {queue.items.map((item) => (
               <li key={item.id}>
-                <UploadCard item={item} onCancel={queue.cancel} onDismiss={queue.dismiss} onJobFinished={onJobFinished} />
+                <UploadCard
+                  item={item}
+                  job={item.jobId ? feed.jobs[item.jobId] : undefined}
+                  onCancel={queue.cancel}
+                  onDismiss={(id) => {
+                    if (item.jobId) feed.dismiss(item.jobId)
+                    queue.dismiss(id)
+                  }}
+                />
+              </li>
+            ))}
+            {otherJobs.map((job) => (
+              <li key={job.id}>
+                <JobStatus job={job} title={titleOf(job.video_id)} onDismiss={() => feed.dismiss(job.id)} />
               </li>
             ))}
           </ul>

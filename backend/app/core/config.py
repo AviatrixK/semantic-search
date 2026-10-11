@@ -32,8 +32,13 @@ class Settings(BaseSettings):
     CORS_ORIGINS: list[str] = ["http://localhost:5173"]
 
     WHISPER_SIZE: str = "base"
+    # CPU threads the worker may use for transcription (faster-whisper cpu_threads) and for torch (embeddings). 1 keeps one of
+    # the production server's two CPUs free for the API while a video is processed. Raise on a bigger machine.
+    WHISPER_THREADS: int = 1
+    TORCH_THREADS: int = 1
     EMBED_MODEL: str = "sentence-transformers/all-MiniLM-L6-v2"
     EMBED_DIM: int = 384
+    WARMUP_ON_START: bool = True  # api: load the embedding model and encode once at startup, before the app reports ready
     CHUNK_SECONDS: float = 30.0
     CHUNK_OVERLAP: float = 5.0
     MAX_UPLOAD_MB: int = 500

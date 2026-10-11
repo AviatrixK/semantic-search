@@ -3,8 +3,6 @@ import { api } from '../api'
 import type { Video } from '../api'
 import { describeError } from '../api/errors'
 
-const REFRESH_WHILE_PROCESSING_MS = 5000
-
 export function useVideos() {
   const [videos, setVideos] = useState<Video[] | null>(null)
   const [loading, setLoading] = useState(true)
@@ -29,14 +27,6 @@ export function useVideos() {
   useEffect(() => {
     void load(false)
   }, [load])
-
-  // Videos still processing (e.g. after a page reload, when the job cards are gone): keep the table fresh.
-  const anyProcessing = videos?.some((v) => v.status === 'uploaded') ?? false
-  useEffect(() => {
-    if (!anyProcessing) return
-    const id = setInterval(() => void load(true), REFRESH_WHILE_PROCESSING_MS)
-    return () => clearInterval(id)
-  }, [anyProcessing, load])
 
   return {
     videos,

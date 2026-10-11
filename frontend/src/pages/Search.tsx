@@ -7,6 +7,7 @@ import { ResultSkeletons } from '../components/Skeleton'
 import { useCountdown } from '../hooks/useCountdown'
 import { useSearch } from '../hooks/useSearch'
 import { useVideos } from '../hooks/useVideos'
+import { emptyResults } from '../lib/emptyResults'
 import { MODE_OPTIONS, filtersKey, filtersToParams, modeOfKey, parseFilters } from '../lib/searchParams'
 import type { SearchFilters } from '../lib/searchParams'
 import styles from './Search.module.css'
@@ -23,6 +24,7 @@ export default function Search() {
   const { state, setQuery, setFilters, submit } = useSearch(filters)
   const { videos } = useVideos()
   const ready = useMemo(() => videos?.filter((v) => v.status === 'ready') ?? null, [videos])
+  const processing = useMemo(() => videos?.filter((v) => v.status === 'uploaded').length ?? 0, [videos])
   const byId = useMemo(() => new Map<string, Video>((videos ?? []).map((v) => [v.id, v])), [videos])
 
   // New query in the address: search at once (no debounce: the header box only sends it on Enter).
@@ -55,6 +57,7 @@ export default function Search() {
   }
 
   const hasHits = state.hits.length > 0
+  const empty = emptyResults(state.query, processing)
   const loading = state.status === 'loading'
   const shownMode = state.filtersKey ? modeOfKey(state.filtersKey) : filters.mode // what the results on screen were searched with
 
@@ -79,7 +82,8 @@ export default function Search() {
 
       {state.status === 'ready' && !hasHits && (
         <div className={styles.empty}>
-          <strong>No matches for “{state.query}”.</strong>
+          <strong>{empty.title}</strong>
+          {empty.processingNote && <span>{empty.processingNote}</span>}
           <span>
             {shownMode === 'keyword'
               ? 'Exact-word search needs every word to appear in the same moment. Try fewer words, or switch to Best match.'

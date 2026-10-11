@@ -11,13 +11,13 @@ from app.core.config import settings
 from app.core.db import get_db
 from app.models import Job, Video
 from app.schemas.video import ChunkOut, JobOut, UploadOut, VideoOut
-from app.services import retrieval, storage
+from app.services import jobevents, retrieval, storage
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["videos"])
 ALLOWED = {"video/mp4", "video/webm", "video/quicktime", "video/x-matroska"}
 ALLOWED_EXT = {"mp4", "webm", "mov", "mkv"}
-ACTIVE_STAGES = ("queued", "extracting", "transcribing", "embedding")
+ACTIVE_STAGES = jobevents.ACTIVE_STAGES
 
 
 def _size(file: UploadFile) -> int:
@@ -65,6 +65,7 @@ def upload_video(file: UploadFile, title: str | None = Form(None, max_length=200
         raise HTTPException(500, "Could not save the video. Please try again.")
 
     from app.workers.tasks import ingest_video  # local import keeps API startup light
+    jobevents.publish(jobevents.payload(job.id, vid, "queued", 0))  # the admin page can show the card before the worker starts
     ingest_video.delay(str(vid), str(job.id))
     return UploadOut(video_id=str(vid), job_id=str(job.id))
 
@@ -82,6 +83,7 @@ def reprocess_video(video_id: uuid.UUID, _: CurrentUser = Depends(require_admin)
     db.commit()
 
     from app.workers.tasks import ingest_video
+    jobevents.publish(jobevents.payload(job.id, video_id, "queued", 0))
     ingest_video.delay(str(video_id), str(job.id))  # idempotent: old chunks are replaced, never duplicated
     return UploadOut(video_id=str(video_id), job_id=str(job.id))
 

@@ -295,3 +295,39 @@ def test_rerank_off_by_default_never_loads_the_model(seeded, monkeypatch):
     monkeypatch.setattr(rerank, "_model", lambda: (_ for _ in ()).throw(AssertionError("model must not load")))
     hits = seeded.get("/api/search?q=robots").json()
     assert hits and all(h["rerank_score"] is None for h in hits)
+
+
+# ---------------------------------------------------------------- timing headers (item: measure the highlight step)
+def test_route_sends_server_timing_and_highlight_headers(route_client):
+    r = route_client.get("/api/search?q=hello")
+    assert r.status_code == 200
+    assert r.headers["Server-Timing"].startswith("log;dur=") and "total;dur=" in r.headers["Server-Timing"]
+    assert r.headers["X-Search-Highlight"] == "stored=0, fallback=0, single=0"
+    assert route_client.hybrid.call_args.kwargs["timings"] is not None
+
+
+def test_cors_exposes_the_new_timing_headers():
+    from fastapi.testclient import TestClient
+    r = TestClient(app).get("/health", headers={"Origin": settings.CORS_ORIGINS[0]})
+    exposed = r.headers["access-control-expose-headers"]
+    assert "Server-Timing" in exposed and "X-Search-Highlight" in exposed
+
+
+def test_headers_report_stored_highlights_and_no_sentence_embedding(seeded):
+    r = seeded.get(f"/api/search?q=robots&video_id={seeded.v1.id}")
+    timing = r.headers["Server-Timing"]
+    for name in ("log", "embed", "vector_sql", "keyword_sql", "hl_lookup", "total"):
+        assert f"{name};dur=" in timing
+    assert "hl_embed" not in timing  # the slow path never ran
+    assert r.headers["X-Search-Highlight"] == "stored=2, fallback=0, single=1"
+    assert seeded.embed_batch.call_count == 0
+
+
+def test_headers_flag_the_slow_fallback_and_it_is_logged(seeded, db_session, caplog):
+    db_session.execute(text("DELETE FROM chunk_sentences"))
+    db_session.commit()
+    with caplog.at_level("WARNING"):
+        r = seeded.get(f"/api/search?q=robots&video_id={seeded.v1.id}")
+    assert r.headers["X-Search-Highlight"] == "stored=0, fallback=2, single=1"
+    assert "hl_embed;dur=" in r.headers["Server-Timing"]
+    assert any("chunk_sentences" in m for m in caplog.messages)

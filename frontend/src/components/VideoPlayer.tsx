@@ -24,9 +24,11 @@ interface Props {
 type Phase = 'idle' | 'loading' | 'ready' | 'error'
 
 /**
- * One <video> that can be pointed at any video: it fetches the presigned URL (cached per video, see lib/streamUrls.ts),
- * loads it, jumps to the requested second and plays. Asking for another moment of the video that is already loaded
- * just seeks. If the URL turns out to have expired it fetches a fresh one once and resumes where it was.
+ * The ONE <video> of the app, pointed at any video on demand. It has preload="none": nothing is downloaded until playback
+ * starts. When asked to show a video it fetches the presigned URL (cached per video, see lib/streamUrls.ts), sets it, and,
+ * if playback was requested, starts it at the requested second (the bytes before that second are never fetched). Asking for
+ * another moment of the video that is already loaded just seeks. If the URL turns out to have expired it fetches a fresh
+ * one once and resumes where it was.
  */
 export default function VideoPlayer({ request, label = 'Video player', onTime, emptyMessage = 'Pick something to play it here.' }: Props) {
   const video = useRef<HTMLVideoElement>(null)
@@ -60,6 +62,19 @@ export default function VideoPlayer({ request, label = 'Video player', onTime, e
     }
   }, [])
 
+  /** Starts playback at the pending moment. Needed because with preload="none" the element never loads (so never fires
+   *  loadedmetadata) until it is told to play. Setting currentTime before the metadata is known sets the start position. */
+  const startPlayback = useCallback(() => {
+    const v = video.current
+    const p = pending.current
+    if (!v || !p?.play) return
+    v.currentTime = p.t
+    v.play().then(
+      () => setTapToPlay(null),
+      () => setTapToPlay(p.t), // blocked autoplay: the hint shows, the user's own play press loads and seeks
+    )
+  }, [])
+
   const load = useCallback((videoId: string, fresh: boolean) => {
     const id = ++latest.current
     setPhase('loading')
@@ -69,7 +84,8 @@ export default function VideoPlayer({ request, label = 'Video player', onTime, e
       (url) => {
         if (id !== latest.current) return
         loaded.current = videoId
-        setSrc(url) // the element loads it; loadedmetadata applies the pending seek
+        setSrc(url) // the element does NOT download yet (preload="none"); play() does, and loadedmetadata applies the seek
+        setPhase('ready')
       },
       (err: unknown) => {
         if (id !== latest.current) return
@@ -80,16 +96,21 @@ export default function VideoPlayer({ request, label = 'Video player', onTime, e
   }, [setPhase])
 
   useEffect(() => {
+    if (src) startPlayback() // a new video was just set: begin playing it if that was asked
+  }, [src, startPlayback])
+
+  useEffect(() => {
     if (!request) return
     pending.current = { t: request.t, play: request.play }
     setTapToPlay(null)
     if (loaded.current === request.videoId && phaseRef.current !== 'error') {
       if ((video.current?.readyState ?? 0) >= 1) applyPending() // already loaded: just seek
-      return // otherwise loadedmetadata is still coming and will apply it
+      else startPlayback() // set but never played yet (no metadata): playing is what makes it load
+      return
     }
     retried.current = false
     load(request.videoId, false)
-  }, [request, applyPending, load])
+  }, [request, applyPending, load, startPlayback])
 
   function onError() {
     const v = video.current
@@ -122,7 +143,7 @@ export default function VideoPlayer({ request, label = 'Video player', onTime, e
           src={src}
           controls
           playsInline
-          preload="metadata"
+          preload="none"
           aria-label={label}
           onLoadedMetadata={() => {
             setPhase('ready')

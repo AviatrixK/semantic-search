@@ -115,12 +115,11 @@ and jump to timestamps; a Gemini tool-calling agent answers multi-step questions
   no test framework dependency). Logic that must be tested lives outside React components.
 - **Admin videos page (`/admin`, `pages/AdminVideos.tsx`).** Uploads use `api.upload` (XMLHttpRequest, for progress events) which shares
   `withAuthRetry` with `api.request`: same 401 -> single-flight refresh -> retry, same ApiError. Uploads go ONE AT A TIME (queue reducer
-  in `lib/uploadQueue.ts`); server-side processing of earlier files runs in parallel, each with its own `JobStatus` card polling
-  `/api/jobs/{id}` every 2 s via `useJobPolling` -> `lib/poller.ts` (one request at a time, stops on done/failed or fatal 401/403/404,
-  backs off on errors, honours Retry-After on 429). `buildUploadForm` re-wraps the file with the right MIME type: browsers send "" for
+  in `lib/uploadQueue.ts`); server-side processing of earlier files runs in parallel, each with its own `JobStatus` card fed by the
+  live job feed (SSE, see the "No polling" bullet; `JobStatus` is purely presentational). `buildUploadForm` re-wraps the file with the right MIME type: browsers send "" for
   .mkv and the backend answers 415. Client-side size/type checks use `VITE_MAX_UPLOAD_MB` (default 500): keep it equal to the backend's
-  `MAX_UPLOAD_MB`. `Video.status` "uploaded" means stored and waiting for / in processing (UI badge "Processing"); the table refreshes
-  itself every 5 s while any video is processing. `GET /api/videos` returns `created_at`.
+  `MAX_UPLOAD_MB`. `Video.status` "uploaded" means stored and waiting for / in processing (UI badge "Processing"); the table reloads once
+  when the feed reports a job finished. `GET /api/videos` returns `created_at`.
 - **Search UX (now `/search`, see the redesign bullet; the combobox/debounce below is the searcher's logic), Library (`/library`), Watch (`/watch/:videoId?t=`).** Search is a debounced (400 ms), cancellable combobox:
   `lib/searcher.ts` (one request per pause, newer queries abort older ones, unchanged queries are not repeated, queries < 2 chars never
   hit the server); focus stays in the box, arrows move `aria-activedescendant`, Enter plays the selected result or searches. The query
@@ -163,12 +162,36 @@ and jump to timestamps; a Gemini tool-calling agent answers multi-step questions
   token budget in Redis (`services/usage.py`, fail-open), last 3 Q/A turns per chat session held SERVER-side (`services/memory.py`, keyed
   by user + client session id). Frontend: `lib/sse.ts` parser, `lib/askStream.ts`, `lib/trace.ts`, `components/AgentTrace.tsx`.
   Not yet done: a real Gemini call and a real-browser E2E of the live trace (unit + fake-server verified only).
+- **No polling, no preloading (mentor review of a production network recording).** The frontend has NO `setInterval` and loads NO video bytes
+  until the user opens one (both enforced by `tests/noBackgroundRequests.test.mjs`: no `setInterval`, every `<video>` has `preload="none"`, the
+  player is the only `<video>`, only the player asks for stream URLs). Search/Home/Library/Watch make zero requests after their first load.
+  Job progress: worker (`_set`) and upload/reprocess routes publish `{id, video_id, stage, progress, error}` to Redis channel `svs:job-events`
+  (`services/jobevents.py`, fail-open); `GET /api/jobs/events` (`api/routes/jobs.py`, admin only, async + `redis.asyncio`, registered BEFORE
+  the videos router so `/api/jobs/{job_id}` does not swallow it) subscribes first, then sends a `snapshot` of all active jobs, then `job`
+  events and `: keep-alive` comments; Redis down before the stream -> real 503. Client: `lib/jobFeed.ts` (parse, reducer, `connectJobFeed`
+  reconnects with 1 s..30 s backoff only if the stream drops; 401/403/404 stop for good), `hooks/useJobFeed.ts` (connected only while
+  `enabled`); `AdminVideos` enables it while a video is "uploaded", a card awaits its first event, or the feed has a running job. The player
+  starts playback itself (`preload="none"` never fires loadedmetadata before play): `startPlayback` sets currentTime first, then `play()`.
+  Search empty state: `lib/emptyResults.ts` ("No results for 'q'" + "N videos are still processing and are not searchable yet.").
+  A thumbnail from the video file is NOT coming back unless it is a small server-made poster image.
+- **Warm start and faststart (Round 1 review).** The API loads the embedding model and encodes once in the FastAPI lifespan (`embedding.warm_up`,
+  `WARMUP_ON_START`, default true), in every gunicorn worker; `/health` answers 503 until it is done (`app.state.ready`), uvicorn takes no
+  request before lifespan startup ends, and a failed warm-up kills the worker. Measured: first query after warm-up 14 ms vs 11.7 s cold.
+  The thread limit is the Celery worker's only (`worker_process_init`); a test fails if API code calls `limit_torch_threads`. Do NOT use
+  gunicorn `--preload` (see docs/DECISIONS.md). Ingest remuxes MP4/MOV with `-c copy -movflags +faststart` (`media.remux_faststart`,
+  `tasks._store_faststart`, best effort, replaces the stored object under the same key); `media.moov_before_mdat` reads the box headers to
+  decide. Existing videos: `python -m app.scripts.remux_faststart [--dry-run] [--keep-original]`. webm/mkv have no moov atom: untouched.
+- **Worker threads and search timing.** `WHISPER_THREADS` (default 1, faster-whisper `cpu_threads`) and `TORCH_THREADS` (default 1,
+  `torch.set_num_threads` in `worker_process_init`) keep one of the server's 2 CPUs free for the API; raise both on a bigger machine.
+  `/api/search` sends `Server-Timing` (log, embed, vector_sql, keyword_sql, hl_lookup, hl_embed, rerank, total; visible in DevTools >
+  Network > Timing) and `X-Search-Highlight: stored=N, fallback=M, single=K` (`services/timing.py`, `timings=` kwarg of the retrieval
+  functions). `fallback>0` means highlights were embedded per request (slow) and logs a WARNING. `python -m app.scripts.check_highlights`
+  reports chunk_sentences coverage (exit 1 if any chunk would fall back).
 - **Frontend redesign (YouTube-style, LIGHT by default).** Shell: sticky `Header` (menu button, logo, search box, avatar `AccountMenu`) + `Sidebar`
   (full / icon rail via the hamburger, remembered in `svs.sidebar`; a bottom bar on phones) + page. Routes: `/` Home (thumbnail grid + sort chips;
   an old `/?q=` link redirects), `/search?q&mode&video&after` (YouTube-style result rows; the header box is the only search input, Enter submits,
-  `/` focuses it everywhere), `/watch/:id?t=` (big player + transcript panel), `/ask`, `/library`, `/admin`. Result thumbnails and cards are the
-  video itself: `VideoThumb` is a muted `<video preload="metadata" src="<presigned>#t=<moment>">` created only when near the screen (no thumbnail
-  files). Theme: light by default, dark only by choice (`lib/theme.ts`, `svs.theme`, applied by an inline script in `index.html`); the OS dark
+  `/` focuses it everywhere), `/watch/:id?t=` (big player + transcript panel), `/ask`, `/library`, `/admin`. Thumbnails are colour tiles:
+  `VideoThumb` has NO `<video>` and makes no request (see the "No polling" bullet). Theme: light by default, dark only by choice (`lib/theme.ts`, `svs.theme`, applied by an inline script in `index.html`); the OS dark
   setting is IGNORED on purpose; dark tokens are the `[data-theme='dark']` block in `index.css`. NO background doodles/patterns (removed on request): plain `--bg`. The product is for education: the logo is a
   graduation cap (no YouTube-like logo or red play button anywhere); the brand colour is indigo `--brand`. Search state: `lib/searchParams.ts` (validated URL <-> filters), `createSearcher` takes filters
   (`setFilters` searches at once; `filtersKey` drops stale responses). Ask: answer style auto|rag|agent (`svs.ask.mode`), Copy answer, Regenerate

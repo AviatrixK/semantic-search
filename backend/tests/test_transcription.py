@@ -76,3 +76,33 @@ def test_progress_callback_reports_position_and_duration(tmp_path):
         transcription.transcribe(write_wav(tmp_path / "a.wav", frames=one_sec * 4),
                                  on_progress=lambda done, total: seen.append((done, total)))
     assert seen == [(1.0, 4.0), (2.0, 4.0)]
+
+
+def test_whisper_model_gets_the_configured_thread_count():
+    import sys
+    from types import SimpleNamespace
+    seen = {}
+
+    class FakeWhisper:
+        def __init__(self, *args, **kwargs):
+            seen.update(kwargs)
+
+    transcription._model.cache_clear()
+    try:
+        with patch.dict(sys.modules, {"faster_whisper": SimpleNamespace(WhisperModel=FakeWhisper)}), \
+             patch.object(transcription.settings, "WHISPER_THREADS", 1):
+            transcription._model()
+        assert seen["cpu_threads"] == 1
+        transcription._model.cache_clear()
+        with patch.dict(sys.modules, {"faster_whisper": SimpleNamespace(WhisperModel=FakeWhisper)}), \
+             patch.object(transcription.settings, "WHISPER_THREADS", 0):
+            transcription._model()
+        assert seen["cpu_threads"] == 1  # 0 would mean "all cores" to ctranslate2: never allowed
+    finally:
+        transcription._model.cache_clear()
+
+
+def test_worker_defaults_leave_a_cpu_for_the_api():
+    from app.core.config import Settings
+    assert Settings.model_fields["WHISPER_THREADS"].default == 1
+    assert Settings.model_fields["TORCH_THREADS"].default == 1

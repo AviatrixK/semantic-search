@@ -23,7 +23,7 @@ def env():
     classes still work in the worker's except clauses."""
     video = SimpleNamespace(id=uuid.uuid4(), storage_key="raw/x.mp4", status="uploaded", duration_sec=None,
                             language=None)
-    job = SimpleNamespace(stage="queued", progress=0, error=None)
+    job = SimpleNamespace(stage="queued", progress=0, error=None, video_id=video.id)
     job_id = uuid.uuid4()
     db = MagicMock()
     db.get.side_effect = lambda model, _id: {Video: video, Job: job}[model]
@@ -33,9 +33,10 @@ def env():
          patch.object(media, "extract_audio", return_value="audio.wav"), \
          patch.object(media, "duration_sec", return_value=20), \
          patch.object(embedding, "embed_batch", side_effect=lambda t: [[0.0] * 384 for _ in t]) as embed, \
+         patch.object(tasks.jobevents, "publish") as publish, \
          patch.object(tasks.ingest_video, "retry", side_effect=Retried) as retry:
         yield SimpleNamespace(db=db, video=video, job=job, job_id=job_id, download=download, put_json=put_json, embed=embed,
-                              retry=retry)
+                              retry=retry, publish=publish)
 
 
 def run(env):
@@ -197,10 +198,16 @@ def test_retry_delay_is_exponential_and_capped():
 def test_progress_maps_to_25_70_and_is_throttled():
     now = [0.0]
     db = MagicMock()
-    job = SimpleNamespace(stage="", progress=0, error=None)
+    job = SimpleNamespace(stage="", progress=0, error=None, video_id=uuid.uuid4())
     db.get.return_value = job
     report = tasks.progress_reporter(db, str(uuid.uuid4()), interval=3.0, clock=lambda: now[0])
 
+    with patch.object(tasks.jobevents, "publish") as publish:
+        _drive_progress(report, now, job, db)
+    assert publish.call_count == db.commit.call_count  # exactly one event per database write: throttled calls publish nothing
+
+
+def _drive_progress(report, now, job, db):
     report(0, 100)
     assert (job.stage, job.progress) == ("transcribing", 25)
     now[0] = 1.0
@@ -218,3 +225,17 @@ def test_progress_maps_to_25_70_and_is_throttled():
     now[0] = 15.0
     report(5, 0)  # unknown duration must not divide by zero
     assert job.progress == 25
+
+
+def test_progress_is_published_for_every_stage_and_for_failures(env):
+    with patch.object(transcription, "transcribe", return_value=(SEGMENTS, "en")):
+        run(env)
+    sent = [c[0][0] for c in env.publish.call_args_list]
+    assert [e["stage"] for e in sent] == ["extracting", "transcribing", "embedding", "done"]
+    assert sent[-1]["progress"] == 100 and all(e["video_id"] == str(env.video.id) for e in sent)
+
+    env.publish.reset_mock()
+    with patch.object(transcription, "transcribe", side_effect=transcription.NoSpeechError("x")):
+        run(env)
+    last = env.publish.call_args_list[-1][0][0]
+    assert last["stage"] == "failed" and last["error"] == "No speech detected in this video."

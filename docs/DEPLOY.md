@@ -176,6 +176,24 @@ its notes give the `ALTER` statement; run it by hand (init.sql does not re-run o
 dc exec postgres psql -U svs -d svs -P pager=off -c "ALTER TABLE ...;"
 ```
 
+The api only reports healthy after every gunicorn worker has loaded and warmed the embedding model, so after a deploy
+`dc ps` shows the api as `starting` for roughly 30-90 s on the t3.medium (it was 45 s on a cold laptop). That is expected; searches
+are fast from the first request.
+
+**One-off, after the first deploy of the faststart release:** existing MP4/MOV uploads still have their index at the end of the file.
+Fix them in place (stream copy, no re-encode, a few seconds each; safe to re-run):
+
+```bash
+dc exec api python -m app.scripts.remux_faststart --dry-run      # what would change
+dc exec api python -m app.scripts.remux_faststart --keep-original # also keeps each original under originals/<key> in S3
+```
+
+New uploads are remuxed automatically by the worker. Delete the `originals/` objects once you have played a few videos.
+
+`WHISPER_THREADS` and `TORCH_THREADS` (default 1 each, worker only: the api ignores them, so one of the two CPUs stays free for search while a video is processed) are read at
+start: add them to `.env.prod` and run `dc up -d` (no rebuild). Raise them only on a bigger instance. After a release that touches search
+or ingest, `dc exec api python -m app.scripts.check_highlights` must print `OK` (otherwise run `backfill_sentences`).
+
 Changing `WHISPER_SIZE`, `EMBED_MODEL` or `MAX_UPLOAD_MB` needs the rebuild too (models and the UI limit are baked into the images).
 A different embedding dimension also needs a schema change and a re-ingest.
 

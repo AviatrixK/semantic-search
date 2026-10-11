@@ -17,7 +17,7 @@ interface Props {
 }
 
 /**
- * One search result, YouTube style: the thumbnail is the frame where the match starts, then the title, upload info, a
+ * One search result, YouTube style: the thumbnail is a colour tile (no video is loaded until it is opened), then the title, upload info, a
  * "jump to" time chip and the matching sentence in bold. The whole row opens the video at that moment.
  */
 export default function ResultCard({ hit, video, mode }: Props) {
@@ -29,7 +29,7 @@ export default function ResultCard({ hit, video, mode }: Props) {
   return (
     <Link to={watchPath(hit.video_id, hit.start_sec)} className={styles.row}>
       <div className={styles.thumb}>
-        <VideoThumb videoId={hit.video_id} at={hit.start_sec} duration={video?.duration_sec} />
+        <VideoThumb videoId={hit.video_id} duration={video?.duration_sec} />
       </div>
       <div className={styles.body}>
         <h2 className={styles.title}>{hit.title}</h2>

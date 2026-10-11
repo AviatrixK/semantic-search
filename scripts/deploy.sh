@@ -28,8 +28,8 @@ fi
 "${DC[@]}" up -d --remove-orphans
 
 echo
-echo "Waiting up to 3 minutes for the services to become healthy..."
-for _ in $(seq 1 36); do
+echo "Waiting up to 5 minutes for the services (each api worker warms the embedding model first) to become healthy..."
+for _ in $(seq 1 60); do
   if ! "${DC[@]}" ps --format '{{.Service}} {{.Health}}' | grep -Eq ' (starting|unhealthy)$'; then break; fi
   sleep 5
 done
