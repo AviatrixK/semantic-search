@@ -22,8 +22,8 @@ from sqlalchemy import select
 
 from app.core.config import settings
 from app.core.db import SessionLocal
-from app.models import Video
-from app.services import media, storage
+from app.models import Job, Video
+from app.services import jobevents, media, storage
 
 
 def process(key: str, tmp: str, *, dry_run: bool, keep_original: bool) -> str:
@@ -31,6 +31,8 @@ def process(key: str, tmp: str, *, dry_run: bool, keep_original: bool) -> str:
     ext = key.rsplit(".", 1)[-1].lower()
     if ext not in media.FASTSTART_TYPES:
         return f"skipped: .{ext} has no moov atom"
+    if media.moov_before_mdat_in_head(storage.read_head(key)) is True:
+        return "already-fast"  # decided from the first 64 KB: nothing downloaded
     src = os.path.join(tmp, f"src.{ext}")
     storage.download_to(key, src)
     state = media.moov_before_mdat(src)
@@ -65,6 +67,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.video_id:
             stmt = stmt.where(Video.id == args.video_id)
         videos = db.execute(stmt).all()
+        busy = set(db.scalars(select(Job.video_id).where(Job.stage.in_(jobevents.ACTIVE_STAGES))).all())
     if not videos:
         print("No videos found.")
         return 0
@@ -73,8 +76,11 @@ def main(argv: list[str] | None = None) -> int:
     failed = 0
     for video_id, title, key in videos:
         try:
-            with tempfile.TemporaryDirectory() as tmp:
-                result = process(key, tmp, dry_run=args.dry_run, keep_original=args.keep_original)
+            if video_id in busy:  # the worker may be replacing this very object
+                result = "skipped: a processing job is running for it"
+            else:
+                with tempfile.TemporaryDirectory() as tmp:
+                    result = process(key, tmp, dry_run=args.dry_run, keep_original=args.keep_original)
         except Exception as exc:  # one broken file must not stop the rest
             failed += 1
             result = f"FAILED: {type(exc).__name__}: {str(exc)[:200]}"

@@ -63,6 +63,12 @@ def put_json(key: str, obj) -> None:
                   Body=json.dumps(obj, ensure_ascii=False).encode("utf-8"))
 
 
+def read_head(key: str, nbytes: int = 65536) -> bytes:
+    """The first `nbytes` of an object (a ranged GET): enough to read an MP4's top-level box headers without downloading it."""
+    obj = s3.get_object(Bucket=settings.S3_BUCKET, Key=key, Range=f"bytes=0-{nbytes - 1}")
+    return obj["Body"].read()
+
+
 def download_to(key: str, path: str):
     s3.download_file(settings.S3_BUCKET, key, path)
 

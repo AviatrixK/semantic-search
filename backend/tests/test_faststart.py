@@ -130,6 +130,13 @@ def make_downloader(data: bytes):
     return lambda key, path: open(path, "wb").write(data)
 
 
+@pytest.fixture(autouse=True)
+def _head_of_slow_file_by_default():
+    """read_head is a ranged S3 GET: the tests give it the first bytes of whatever the 'object' holds."""
+    with patch.object(storage, "read_head", return_value=SLOW[:64]) as head:
+        yield head
+
+
 def test_script_fixes_a_slow_video_verifies_and_uploads_in_place(tmp_path):
     uploads = []
     fast = FAST
@@ -176,3 +183,79 @@ def test_script_does_not_replace_the_original_when_verification_fails(tmp_path):
         with pytest.raises(media.MediaError, match="duration"):
             remux_faststart.process("raw/a.mp4", str(tmp_path), dry_run=False, keep_original=False)
     upload.assert_not_called()
+
+
+# ---------------------------------------------------------------- head check: nothing is downloaded for fast files
+def test_head_decides_that_a_fast_file_needs_no_download(tmp_path, _head_of_slow_file_by_default):
+    _head_of_slow_file_by_default.return_value = FAST[:64]
+    with patch.object(storage, "download_to") as download:
+        assert remux_faststart.process("raw/a.mp4", str(tmp_path), dry_run=False, keep_original=False) == "already-fast"
+    download.assert_not_called()
+
+
+def test_head_walk_is_only_trusted_when_it_finds_the_index_first():
+    assert media.moov_before_mdat_in_head(FAST) is True
+    assert media.moov_before_mdat_in_head(FAST[:20]) is not True  # cut before the index header: undecided, never a false "fast"
+    assert media.moov_before_mdat_in_head(SLOW) is False
+    assert media.moov_before_mdat_in_head(b"") is None
+
+
+def test_a_slow_file_is_still_downloaded_and_fixed_after_the_head_check(tmp_path):
+    def fake_remux(src, dst):
+        open(dst, "wb").write(FAST)
+        return dst
+
+    with patch.object(storage, "download_to", side_effect=make_downloader(SLOW)) as download,          patch.object(media, "remux_faststart", side_effect=fake_remux),          patch.object(media, "duration_sec", return_value=60), patch.object(media, "has_audio", return_value=True),          patch.object(storage, "upload_fileobj"):
+        assert remux_faststart.process("raw/a.mp4", str(tmp_path), dry_run=False, keep_original=False) == "fixed"
+    download.assert_called_once()
+
+
+def test_running_it_twice_changes_nothing_the_second_time(tmp_path):
+    """The stored object after the first run reads as faststart, so the second run downloads and uploads nothing."""
+    state = {"data": SLOW}
+
+    def fake_remux(src, dst):
+        open(dst, "wb").write(FAST)
+        return dst
+
+    def head(key, n=65536):
+        return state["data"][:n]
+
+    def upload(f, key, content_type):
+        state["data"] = f.read()
+
+    with patch.object(storage, "read_head", side_effect=head),          patch.object(storage, "download_to", side_effect=lambda k, p: open(p, "wb").write(state["data"])) as download,          patch.object(media, "remux_faststart", side_effect=fake_remux),          patch.object(media, "duration_sec", return_value=60), patch.object(media, "has_audio", return_value=True),          patch.object(storage, "upload_fileobj", side_effect=upload) as up:
+        first = remux_faststart.process("raw/a.mp4", str(tmp_path), dry_run=False, keep_original=False)
+        downloads_after_first, uploads_after_first = download.call_count, up.call_count
+        second = remux_faststart.process("raw/a.mp4", str(tmp_path), dry_run=False, keep_original=False)
+    assert (first, second) == ("fixed", "already-fast")
+    assert download.call_count == downloads_after_first and up.call_count == uploads_after_first
+
+
+# ---------------------------------------------------------------- main(): job skip, failures, exit code
+def run_main(videos, busy, argv, process_result):
+    db = MagicMock()
+    db.__enter__.return_value = db
+    db.execute.return_value.all.return_value = videos
+    db.scalars.return_value.all.return_value = list(busy)
+    with patch.object(remux_faststart, "SessionLocal", return_value=db),          patch.object(remux_faststart, "process", side_effect=process_result) as process:
+        code = remux_faststart.main(argv)
+    return code, process
+
+
+def test_main_skips_videos_that_are_being_processed():
+    a, b = uuid.uuid4(), uuid.uuid4()
+    code, process = run_main([(a, "A", "raw/a.mp4"), (b, "B", "raw/b.mp4")], {a}, [], lambda *x, **k: "fixed")
+    assert code == 0 and process.call_count == 1 and process.call_args[0][0] == "raw/b.mp4"
+
+
+def test_main_continues_after_a_failure_and_exits_1():
+    a, b = uuid.uuid4(), uuid.uuid4()
+
+    def process(key, tmp, **kw):
+        if key == "raw/a.mp4":
+            raise media.MediaError("broken file")
+        return "fixed"
+
+    code, p = run_main([(a, "A", "raw/a.mp4"), (b, "B", "raw/b.mp4")], set(), ["--dry-run"], process)
+    assert code == 1 and p.call_count == 2 and p.call_args[1]["dry_run"] is True

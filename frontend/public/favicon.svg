@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Semantic Video Search">
+  <rect width="32" height="32" rx="7" fill="#4f46e5"/>
+  <g transform="translate(4 4)" fill="none" stroke="#ffffff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M2.5 9.5 12 5l9.5 4.5L12 14zM6 11.8V16c3.4 2.3 8.6 2.3 12 0v-4.2M21.5 9.5V15"/>
+  </g>
+</svg>

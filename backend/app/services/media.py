@@ -1,3 +1,4 @@
+import io
 import json
 import os
 import shutil
@@ -69,29 +70,39 @@ def duration_sec(path: str) -> int:
 FASTSTART_TYPES = {"mp4": "video/mp4", "m4v": "video/mp4", "mov": "video/quicktime"}  # webm/mkv have no moov atom
 
 
+def _walk_boxes(f, size_total: int) -> bool | None:
+    pos = 0
+    while pos + 8 <= size_total:
+        f.seek(pos)
+        header = f.read(8)
+        size, kind = int.from_bytes(header[:4], "big"), header[4:8]
+        if size == 1:  # 64-bit size follows
+            size = int.from_bytes(f.read(8), "big")
+        elif size == 0:  # the box runs to the end of the file
+            size = size_total - pos
+        if kind == b"moov":
+            return True
+        if kind == b"mdat":
+            return False
+        if size < 8:
+            return None
+        pos += size
+    return None
+
+
 def moov_before_mdat(path: str) -> bool | None:
     """Walks the top-level MP4/MOV boxes (reads only their 8-16 byte headers). True: the index comes before the media data
     (already faststart). False: the media data comes first, so players must seek to the end for the index. None: neither
     box was found (not an MP4-family file)."""
-    size_total = os.path.getsize(path)
-    pos = 0
     with open(path, "rb") as f:
-        while pos + 8 <= size_total:
-            f.seek(pos)
-            header = f.read(8)
-            size, kind = int.from_bytes(header[:4], "big"), header[4:8]
-            if size == 1:  # 64-bit size follows
-                size = int.from_bytes(f.read(8), "big")
-            elif size == 0:  # the box runs to the end of the file
-                size = size_total - pos
-            if kind == b"moov":
-                return True
-            if kind == b"mdat":
-                return False
-            if size < 8:
-                return None
-            pos += size
-    return None
+        return _walk_boxes(f, os.path.getsize(path))
+
+
+def moov_before_mdat_in_head(head: bytes) -> bool | None:
+    """Same walk over only the first bytes of a file (a ranged S3 read). The boxes that matter sit at the very start, so
+    True is reliable: that file is already faststart and need not be downloaded. Anything else (False, None) only means
+    "not decided here": the caller must look at the whole file."""
+    return _walk_boxes(io.BytesIO(head), len(head))
 
 
 def needs_faststart(path: str) -> bool:

@@ -180,7 +180,11 @@ and jump to timestamps; a Gemini tool-calling agent answers multi-step questions
   The thread limit is the Celery worker's only (`worker_process_init`); a test fails if API code calls `limit_torch_threads`. Do NOT use
   gunicorn `--preload` (see docs/DECISIONS.md). Ingest remuxes MP4/MOV with `-c copy -movflags +faststart` (`media.remux_faststart`,
   `tasks._store_faststart`, best effort, replaces the stored object under the same key); `media.moov_before_mdat` reads the box headers to
-  decide. Existing videos: `python -m app.scripts.remux_faststart [--dry-run] [--keep-original]`. webm/mkv have no moov atom: untouched.
+  decide. Existing videos: `python -m app.scripts.remux_faststart [--dry-run] [--keep-original] [--video-id ID]`: decides "already fast" from a ranged
+  read of the first 64 KB (no download), skips videos with a running job, verifies duration/audio before replacing; re-runs change nothing.
+  webm/mkv have no moov atom: untouched. `/favicon.ico` + `/favicon.svg` live in `frontend/public/` (regenerate the .ico with
+  `node frontend/scripts/make-favicon.mjs`). Dev compose runs uvicorn with `--timeout-graceful-shutdown 3` because SSE streams otherwise
+  block `--reload` for as long as an admin tab is open.
 - **Worker threads and search timing.** `WHISPER_THREADS` (default 1, faster-whisper `cpu_threads`) and `TORCH_THREADS` (default 1,
   `torch.set_num_threads` in `worker_process_init`) keep one of the server's 2 CPUs free for the API; raise both on a bigger machine.
   `/api/search` sends `Server-Timing` (log, embed, vector_sql, keyword_sql, hl_lookup, hl_embed, rerank, total; visible in DevTools >
