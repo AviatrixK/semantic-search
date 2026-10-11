@@ -75,6 +75,8 @@ export function describeError(err: unknown, context?: ErrorContext): string {
       if (err.status === 415) return 'Unsupported file type. Upload an MP4, WebM, MOV or MKV video.'
       if (err.status === 400) return err.message === 'Empty file' ? 'That file is empty.' : err.message
       if (err.status === 403) return 'Only administrators can upload videos.'
+      // Same file already stored: the backend's text names the existing video and says what to do (reprocess, delete first).
+      if (err.status === 409) return err.message || 'This file was already uploaded.'
     }
     if ((context === 'reprocess' || context === 'delete') && err.status === 404) return 'That video no longer exists.'
     if (context === 'reprocess' && err.status === 409) return 'This video is already being processed.'

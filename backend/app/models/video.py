@@ -19,6 +19,9 @@ class Video(Base):
     language: Mapped[str | None] = mapped_column(String)
     status: Mapped[str] = mapped_column(String, default="uploaded")
     uploaded_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
+    # SHA-256 (hex) of the file as uploaded. Unique where set: the same file cannot be stored twice. NULL for videos that
+    # predate the column until `python -m app.scripts.backfill_sha256` has run.
+    sha256: Mapped[str | None] = mapped_column(String, unique=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

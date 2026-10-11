@@ -143,7 +143,9 @@ def test_limiter_state_is_flushed_between_tests(api):
 def test_search_limited_to_30_per_minute_per_user(api, mid_window):
     alice = register_and_login(api, "alice@example.com")
     bob = register_and_login(api, "bob@example.com")
-    with patch.object(retrieval, "vector_search", return_value=[]):  # the embedding model is never loaded
+    # /api/search defaults to mode=hybrid, so that is the function to stub: patching vector_search alone left the real
+    # embedding model and the database in the loop (13 s, and slow enough to fail under load).
+    with patch.object(retrieval, "hybrid_search", return_value=[]), patch.object(retrieval, "vector_search", return_value=[]):
         codes = [api.get("/api/search?q=hello", headers=alice).status_code for _ in range(30)]
         assert codes == [200] * 30
         blocked = api.get("/api/search?q=hello", headers=alice)

@@ -69,6 +69,25 @@ def read_head(key: str, nbytes: int = 65536) -> bytes:
     return obj["Body"].read()
 
 
+def object_exists(key: str) -> bool:
+    try:
+        s3.head_object(Bucket=settings.S3_BUCKET, Key=key)
+        return True
+    except ClientError as exc:
+        if str(exc.response.get("Error", {}).get("Code", "")) in ("404", "NoSuchKey", "NotFound"):
+            return False
+        raise
+
+
+def sha256_of_object(key: str) -> str:
+    """Hex SHA-256 of a stored object, streamed in 1 MiB pieces (never held in memory)."""
+    import hashlib
+    digest = hashlib.sha256()
+    for block in s3.get_object(Bucket=settings.S3_BUCKET, Key=key)["Body"].iter_chunks(1024 * 1024):
+        digest.update(block)
+    return digest.hexdigest()
+
+
 def download_to(key: str, path: str):
     s3.download_file(settings.S3_BUCKET, key, path)
 

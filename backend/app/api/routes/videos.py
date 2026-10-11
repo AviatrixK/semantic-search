@@ -2,8 +2,9 @@ import logging
 import uuid
 
 from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
+from fastapi.responses import JSONResponse
 from sqlalchemy import select
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.api.deps import CurrentUser, current_user, require_admin
@@ -11,7 +12,7 @@ from app.core.config import settings
 from app.core.db import get_db
 from app.models import Job, Video
 from app.schemas.video import ChunkOut, JobOut, UploadOut, VideoOut
-from app.services import jobevents, retrieval, storage
+from app.services import dedupe, jobevents, retrieval, storage
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["videos"])
@@ -44,24 +45,35 @@ def upload_video(file: UploadFile, title: str | None = Form(None, max_length=200
     if size > settings.MAX_UPLOAD_MB * 1024 * 1024:
         raise HTTPException(413, f"File too large (max {settings.MAX_UPLOAD_MB} MB)")
 
+    digest = dedupe.sha256_of_fileobj(file.file)  # before anything is stored: a duplicate costs one read, no S3 write
+    existing = dedupe.find_by_sha256(db, digest)
+    if existing is not None:
+        return JSONResponse(status_code=409, content=dedupe.duplicate_body(existing))
+
     vid = uuid.uuid4()
     key = f"raw/{vid}.{ext}"
     storage.upload_fileobj(file.file, key, file.content_type)
 
-    video = Video(id=vid, title=(title or "").strip() or name, storage_key=key, uploaded_by=uuid.UUID(admin.id))
+    video = Video(id=vid, title=(title or "").strip() or name, storage_key=key, uploaded_by=uuid.UUID(admin.id),
+                  sha256=digest)
     job = Job(video_id=vid)
     try:
         db.add(video)
         db.flush()      # insert the video row first so the job's foreign key is valid
         db.add(job)
         db.commit()
-    except SQLAlchemyError:
-        log.exception("upload: database write failed, removing orphaned object %s", key)
+    except SQLAlchemyError as exc:
         db.rollback()
         try:
             storage.delete(key)
         except Exception:
             log.exception("upload: could not remove orphaned object %s", key)
+        if isinstance(exc, IntegrityError):  # the same file was committed by another request between our check and insert
+            existing = dedupe.find_by_sha256(db, digest)
+            if existing is not None:
+                log.info("upload: concurrent duplicate of video %s, removed object %s", existing.id, key)
+                return JSONResponse(status_code=409, content=dedupe.duplicate_body(existing))
+        log.exception("upload: database write failed, removed orphaned object %s", key)
         raise HTTPException(500, "Could not save the video. Please try again.")
 
     from app.workers.tasks import ingest_video  # local import keeps API startup light

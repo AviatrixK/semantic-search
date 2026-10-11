@@ -11,6 +11,8 @@ KNOWN_DEFAULT_DB_PASSWORDS = {"", "svs", "postgres", "password", "change-me", "c
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
+    LOG_LEVEL: str = "INFO"  # DEBUG | INFO | WARNING | ERROR | CRITICAL; applied by app/core/logging.py (api, worker, beat)
+
     APP_ENV: str = "development"  # "production" turns on the startup safety checks below and stops bucket auto-creation
 
     DATABASE_URL: str = "postgresql+psycopg://svs:svs@localhost:5432/svs"
@@ -65,6 +67,14 @@ class Settings(BaseSettings):
     CHAT_MEMORY_TTL_SEC: int = 3600
     SSE_KEEPALIVE_SEC: float = 15.0  # comment line sent on an idle stream so proxies do not close it
     GEMINI_API_KEY: str = ""
+
+    @field_validator("LOG_LEVEL", mode="before")
+    @classmethod
+    def _log_level(cls, v):
+        name = str(v).strip().upper()
+        if name not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
+            raise ValueError(f"LOG_LEVEL must be DEBUG, INFO, WARNING, ERROR or CRITICAL (got {v!r})")
+        return name
 
     @field_validator("S3_ENDPOINT", "S3_PUBLIC_ENDPOINT", "S3_ACCESS_KEY", "S3_SECRET_KEY", mode="before")
     @classmethod

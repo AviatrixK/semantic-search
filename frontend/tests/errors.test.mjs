@@ -72,3 +72,11 @@ test('password rules: bytes not characters, and which rule fails', () => {
   const failed = checkPassword('abcdefgh').filter((c) => !c.ok).map((c) => c.label)
   assert.deepEqual(failed, ['Contains a digit'])
 })
+
+test('upload 409: shows the backend text that names the existing video', () => {
+  const msg = 'This exact file was already uploaded as "My talk" (video 50b5afc1-d7e3-44f9-87cf-31800d1f4f7b). Delete that video first if you want to upload it again.'
+  assert.equal(describeError(new ApiError(409, msg), 'upload'), msg)
+  assert.equal(describeError(new ApiError(409, ''), 'upload'), 'This file was already uploaded.')
+  // other contexts keep their own wording
+  assert.equal(describeError(new ApiError(409, 'x'), 'reprocess'), 'This video is already being processed.')
+})

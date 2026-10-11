@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import ask, auth, jobs, search, videos
 from app.core.config import settings
+from app.core.logging import setup_logging
 from app.services import embedding, storage
 
 log = logging.getLogger(__name__)
@@ -14,6 +15,7 @@ log = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    setup_logging()  # first: gunicorn leaves the root logger at WARNING, which would hide every log.info below
     app.state.ready = False  # /health answers 503 until everything below is done
     storage.ensure_bucket()
     if settings.WARMUP_ON_START:

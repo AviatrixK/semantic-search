@@ -185,6 +185,18 @@ and jump to timestamps; a Gemini tool-calling agent answers multi-step questions
   webm/mkv have no moov atom: untouched. `/favicon.ico` + `/favicon.svg` live in `frontend/public/` (regenerate the .ico with
   `node frontend/scripts/make-favicon.mjs`). Dev compose runs uvicorn with `--timeout-graceful-shutdown 3` because SSE streams otherwise
   block `--reload` for as long as an admin tab is open.
+- **Logging, duplicate uploads, shortcuts (Round 3).** `app/core/logging.py::setup_logging()` (idempotent; stdout; format `time LEVEL
+  logger message`; level from `LOG_LEVEL`, default INFO; botocore/urllib3/httpx stay WARNING unless DEBUG) is called first in the API
+  lifespan and from Celery's `setup_logging` signal (covers worker AND beat; `--loglevel` is then ignored). Under gunicorn the root logger
+  is WARNING, so without it every `log.info` was lost. Access logs are not duplicated: uvicorn/gunicorn loggers keep their own handlers
+  and `propagate=False`. **Duplicate uploads:** `videos.sha256` (nullable, unique index `videos_sha256_key`; init.sql + `db/migrations/
+  2026-10-12-videos-sha256.sql`), hashed before anything is stored (`services/dedupe.py`); a repeat is `409` with `{detail, video_id,
+  title, status}`, also on the race where two identical uploads pass the check together (IntegrityError -> object deleted -> 409).
+  `python -m app.scripts.backfill_sha256 [--dry-run]` fills old videos, prefers `originals/<key>` (the remux backup), reports duplicates
+  without deleting. **Order on a server: migrate, backfill, THEN `remux_faststart`** (remuxing rewrites the bytes, so a later hash would
+  not match the file an admin re-uploads). Prod compose rotates logs for all six services (json-file 10m x 3; tested on the resolved
+  config). `Makefile` (`make ps | logs [s=worker] | deploy | shell-api`) wraps `docker compose --env-file .env.prod -f
+  docker-compose.prod.yml`.
 - **Worker threads and search timing.** `WHISPER_THREADS` (default 1, faster-whisper `cpu_threads`) and `TORCH_THREADS` (default 1,
   `torch.set_num_threads` in `worker_process_init`) keep one of the server's 2 CPUs free for the API; raise both on a bigger machine.
   `/api/search` sends `Server-Timing` (log, embed, vector_sql, keyword_sql, hl_lookup, hl_embed, rerank, total; visible in DevTools >

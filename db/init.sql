@@ -27,8 +27,10 @@ CREATE TABLE videos (
   language      TEXT,
   status        TEXT NOT NULL DEFAULT 'uploaded',
   uploaded_by   UUID REFERENCES users(id),
+  sha256        TEXT,   -- SHA-256 of the uploaded file; unique where set (NULL for videos that predate the column)
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+CREATE UNIQUE INDEX videos_sha256_key ON videos (sha256);
 
 CREATE TABLE jobs (
   id          UUID PRIMARY KEY,
