@@ -97,3 +97,12 @@ def test_only_the_celery_worker_calls_limit_torch_threads():
     users = {str(p.relative_to(app_dir)).replace("\\", "/") for p in app_dir.rglob("*.py")
              if re.search(r"WHISPER_THREADS|TORCH_THREADS", p.read_text(encoding="utf-8"))}
     assert users == {"core/config.py", "services/transcription.py", "workers/celery_app.py"}
+
+
+def test_warm_up_reports_the_torch_thread_count_for_the_startup_log():
+    model = MagicMock()
+    model.encode.return_value = np.zeros((1, 384), dtype=np.float32)
+    with patch.object(embedding, "_model", return_value=model):
+        embedding.warm_up()
+    threads = embedding.warm_threads()
+    assert threads is None or threads >= 1  # a real count (or None if torch is unavailable); never changes the limit

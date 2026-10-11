@@ -20,7 +20,7 @@ async def lifespan(app: FastAPI):
         # Runs in EVERY gunicorn worker (each is its own process with its own model). uvicorn accepts no request until this
         # startup finishes, so the first search never pays the model load. A failure here stops the worker loudly.
         ms = await run_in_threadpool(embedding.warm_up)
-        log.info("embedding model warm (%.0f ms)", ms)
+        log.info("embedding model warm (%.0f ms, torch threads=%s)", ms, embedding.warm_threads())
     app.state.ready = True
     yield
 

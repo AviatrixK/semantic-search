@@ -12,3 +12,4 @@ BuildPhase.md
 !.env.example
 !.env.prod.example
 backups/
+docs/

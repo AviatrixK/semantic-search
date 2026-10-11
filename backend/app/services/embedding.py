@@ -27,6 +27,7 @@ def limit_torch_threads(n: int, torch_module=None) -> None:
     if torch is None:
         import torch
     torch.set_num_threads(max(1, n))
+    log.info("worker: torch threads limited to %d", torch.get_num_threads())
 
 
 @lru_cache
@@ -35,15 +36,26 @@ def _redis() -> redis.Redis:
 
 
 _warm = False
+_threads_at_warmup: int | None = None
+
+
+def warm_threads() -> int | None:
+    """torch's CPU thread count as it was when warm-up finished (for the startup log); None before or without torch."""
+    return _threads_at_warmup
 
 
 def warm_up() -> float:
     """Loads the embedding model and runs one encode, so the first real query pays neither the model load (seconds) nor the
     first-call initialisation. Returns the milliseconds it took. Called by the API at startup, in every gunicorn worker.
     Deliberately does NOT touch thread limits: those belong to the Celery worker (see limit_torch_threads)."""
-    global _warm
+    global _warm, _threads_at_warmup
     started = time.perf_counter()
     embed_batch(["warm up"])  # _model() loads on first use; encoding initialises the tokenizer and thread pools
+    try:
+        import torch
+        _threads_at_warmup = torch.get_num_threads()
+    except Exception:  # only for the log line
+        _threads_at_warmup = None
     _warm = True
     return (time.perf_counter() - started) * 1000
 
