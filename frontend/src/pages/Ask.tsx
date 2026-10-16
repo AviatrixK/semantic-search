@@ -9,6 +9,7 @@ import VideoPlayer from '../components/VideoPlayer'
 import type { SeekRequest } from '../components/VideoPlayer'
 import { useChat } from '../hooks/useChat'
 import { clock } from '../lib/answerText'
+import { usageLine } from '../lib/format'
 import { ASK_MODE_OPTIONS, parseAskMode } from '../lib/askMode'
 import { routeLabel } from '../lib/trace'
 import { watchPath } from '../lib/timeParam'
@@ -148,10 +149,8 @@ export default function Ask() {
                       <AnswerActions text={m.text} citations={m.citations} canRegenerate={!chat.pending && !blocked}
                         onRegenerate={() => chat.regenerate(m.id)} />
                       <AgentTrace steps={m.trace} running={false} />
-                      {m.usage && m.usage.llmCalls > 0 && (
-                        <p className={styles.meta}>
-                          {m.usage.llmCalls} AI call{m.usage.llmCalls === 1 ? '' : 's'} · {m.usage.tokens.toLocaleString()} tokens
-                        </p>
+                      {usageLine(m.usage, m.degraded) && (
+                        <p className={styles.meta} role={m.degraded ? 'status' : undefined}>{usageLine(m.usage, m.degraded)}</p>
                       )}
                     </>
                   )}

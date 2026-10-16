@@ -43,6 +43,7 @@ class TraceStepOut(BaseModel):
 class UsageOut(BaseModel):
     llm_calls: int
     tokens: int
+    model: str | None = None  # the model that answered (a fallback model when the primary was unavailable)
 
 
 class AskOut(BaseModel):
@@ -53,3 +54,5 @@ class AskOut(BaseModel):
     route_reason: str
     trace: list[TraceStepOut] = []
     usage: UsageOut
+    degraded: bool = False  # the AI was unavailable: `answer` is the most relevant search results instead
+    notice: str | None = None  # why the AI was unavailable, in words for the user

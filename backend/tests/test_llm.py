@@ -222,11 +222,14 @@ def test_set_llm_replaces_and_restores_the_default():
         assert llm.get_llm() is fake
     finally:
         llm.set_llm(None)
-    assert isinstance(llm.get_llm(), GeminiLLM)
+    default = llm.get_llm()
+    assert isinstance(default, llm.FallbackLLM) and isinstance(default.models[0][1], GeminiLLM)
 
 
 def test_default_llm_is_built_from_settings_without_calling_the_sdk():
     llm._default.cache_clear()
-    d = llm._default()
+    chain = llm._default()
+    assert [name for name, _ in chain.models] == ["test-model"]  # no LLM_FALLBACK_MODELS in the test environment
+    d = chain.models[0][1]
     assert (d.model, d._timeout_sec, d._max_retries, d._max_output_tokens) == ("test-model", 5.0, 2, 256)
     llm._default.cache_clear()

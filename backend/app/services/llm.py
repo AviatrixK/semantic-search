@@ -21,6 +21,7 @@ RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
 # ---- errors: each carries a short, user-facing message (never keys, prompts or SDK internals)
 class LLMError(Exception):
     user_message = "The answer service is unavailable right now. Please try again in a moment."
+    status: int | None = None  # the provider's HTTP status when there was one (for logs and the circuit breaker, never shown)
 
     def __init__(self, message: str, user_message: str | None = None):
         super().__init__(message)
@@ -33,8 +34,22 @@ class LLMNotConfigured(LLMError):
 
 
 class LLMUnavailable(LLMError):
-    """Rate limited, overloaded, timed out or unreachable, and it did not clear up after the retries."""
+    """Rate limited, overloaded, timed out or unreachable, and it did not clear up after the retries. Ask answers these with
+    the best search results instead of an error (see orchestrator.degraded_answer); `degraded_reason` says why."""
     user_message = "The answer service is busy or unreachable right now. Please try again in a moment."
+    degraded_reason = "The AI service can't be reached right now."
+
+
+class LLMOverloaded(LLMUnavailable):
+    """The provider answered 503 ("high demand") on every attempt."""
+    user_message = "The AI provider is overloaded right now (high demand). Please try again in a minute."
+    degraded_reason = "The AI provider is overloaded right now (high demand)."
+
+
+class LLMQuotaExceeded(LLMUnavailable):
+    """The provider answered 429: the API key's usage limit or quota is used up. Not our own rate limit."""
+    user_message = "The AI usage limit has been reached. Please try again later."
+    degraded_reason = "The AI usage limit has been reached."
 
 
 class LLMRejected(LLMError):
@@ -154,12 +169,19 @@ def backoff_delay(attempt: int, base: float, cap: float, jitter: float) -> float
 def call_with_retries(
     fn: Callable[[], T], *, max_retries: int, base_delay: float = 1.0, max_delay: float = 10.0,
     sleep: Callable[[float], None] = time.sleep, jitter: Callable[[], float] = random.random,
+    on_error: Callable[[BaseException], None] | None = None,
 ) -> tuple[T, int]:
-    """Runs `fn`; retries retryable errors up to `max_retries` times. Returns (result, attempts used)."""
+    """Runs `fn`; retries retryable errors up to `max_retries` times. Returns (result, attempts used).
+    `on_error` hears about EVERY failed attempt (the circuit breaker counts 503s there); a hook that raises is ignored."""
     for attempt in range(max_retries + 1):
         try:
             return fn(), attempt + 1
         except Exception as exc:
+            if on_error is not None:
+                try:
+                    on_error(exc)
+                except Exception:  # pragma: no cover - a broken hook must never change the outcome of the call
+                    log.exception("llm: on_error hook failed")
             if attempt == max_retries or not is_retryable(exc):
                 raise
             delay = backoff_delay(attempt, base_delay, max_delay, jitter())
@@ -177,8 +199,10 @@ def _count(usage, name: str) -> int | None:
 
 class GeminiLLM:
     def __init__(self, *, model: str, api_key: str, timeout_sec: float, max_retries: int, max_output_tokens: int,
-                 client=None, sleep: Callable[[float], None] = time.sleep, jitter: Callable[[], float] = random.random):
+                 client=None, sleep: Callable[[float], None] = time.sleep, jitter: Callable[[], float] = random.random,
+                 on_attempt_error: Callable[[BaseException], None] | None = None):
         self.model = model
+        self._on_attempt_error = on_attempt_error
         self._api_key = api_key
         self._timeout_sec = timeout_sec
         self._max_retries = max_retries
@@ -210,15 +234,18 @@ class GeminiLLM:
         try:
             response, attempts = call_with_retries(
                 lambda: client.models.generate_content(model=self.model, contents=contents, config=config),
-                max_retries=self._max_retries, sleep=self._sleep, jitter=self._jitter,
+                max_retries=self._max_retries, sleep=self._sleep, jitter=self._jitter, on_error=self._on_attempt_error,
             )
         except LLMError:
             raise
         except Exception as exc:
             status = status_of(exc)
             log.error("llm: call failed model=%s error=%s status=%s message=%.200s", self.model, type(exc).__name__, status, exc)
-            if is_retryable(exc):
-                raise LLMUnavailable(f"{type(exc).__name__}: status={status}") from exc
+            if is_retryable(exc):  # tell the three causes apart: they need different words and different reactions
+                kind = LLMOverloaded if status == 503 else LLMQuotaExceeded if status == 429 else LLMUnavailable
+                err = kind(f"{type(exc).__name__}: status={status}")
+                err.status = status
+                raise err from exc
             raise LLMRejected(f"{type(exc).__name__}: status={status}") from exc
 
         latency_ms = int((time.monotonic() - started) * 1000)
@@ -302,6 +329,63 @@ class GeminiLLM:
                           thought_tokens=th, total_tokens=tot, attempts=attempts, latency_ms=latency_ms)
 
 
+# ---- fallback chain: primary model, then each fallback once, with a shared circuit breaker
+def _without_provider_state(messages: list[Message]) -> list[Message]:
+    """A model turn carries its provider's own object (`raw`, with Gemini "thought signatures") that belongs to the model that
+    produced it. Another model gets the plain text and tool calls instead."""
+    return [ModelMsg(text=m.text, tool_calls=m.tool_calls) if isinstance(m, ModelMsg) and m.raw is not None else m
+            for m in messages]
+
+
+class FallbackLLM:
+    """Tries `models` in order. A model is skipped while its circuit is open; it is abandoned for this call when it raises
+    LLMUnavailable (503 / 504 / 429 / timeout / unreachable, after ITS OWN retries). Anything else (bad key, unknown model,
+    empty answer) is not an outage and is raised at once. If every model fails, the first failure is raised so the caller
+    can tell overloaded from quota from unreachable."""
+
+    def __init__(self, models: list[tuple[str, LLM]], breaker):
+        if not models:
+            raise ValueError("FallbackLLM needs at least one model")
+        self.models = models
+        self.breaker = breaker
+
+    @property
+    def model(self) -> str:
+        return self.models[0][0]
+
+    def _run(self, call: Callable[[LLM, int], T]) -> T:
+        failures: list[tuple[str, LLMUnavailable]] = []
+        for i, (name, model) in enumerate(self.models):
+            if self.breaker.is_open(name):
+                log.warning("llm: skipping %s, its circuit is open", name)
+                continue
+            try:
+                result = call(model, i)
+            except LLMUnavailable as exc:
+                failures.append((name, exc))
+                log.warning("llm: %s failed (%s, status=%s)%s", name, type(exc).__name__, exc.status,
+                            ", trying the next model" if i + 1 < len(self.models) else "")
+                continue
+            self.breaker.record_success(name)
+            if i > 0:
+                skipped = ", ".join(n for n, _ in failures) or "primary skipped (circuit open)"
+                log.warning("llm: answered by fallback model %s (not by %s)", name, skipped)
+            return result
+        if failures:
+            log.error("llm: every model failed: %s", "; ".join(f"{n}={type(e).__name__}({e.status})" for n, e in failures))
+            raise failures[0][1]
+        raise LLMOverloaded("every model's circuit is open")
+
+    def generate(self, *, system: str, prompt: str) -> LLMResult:
+        return self._run(lambda model, i: model.generate(system=system, prompt=prompt))
+
+    def generate_turn(self, *, system: str, messages: list[Message], tools: list[ToolSpec] | None = None,
+                      allow_tools: bool = True) -> TurnResult:
+        return self._run(lambda model, i: model.generate_turn(
+            system=system, messages=messages if i == 0 else _without_provider_state(messages), tools=tools,
+            allow_tools=allow_tools))
+
+
 # ---- the instance the app uses (replaceable)
 _override: LLM | None = None
 
@@ -312,10 +396,26 @@ def set_llm(llm: LLM | None) -> None:
     _override = llm
 
 
+def build_chain(*, breaker=None, make: Callable[..., GeminiLLM] = GeminiLLM) -> FallbackLLM:
+    """LLM_MODEL (with LLM_MAX_RETRIES retries) followed by every LLM_FALLBACK_MODELS entry (one attempt each). Each model's
+    503s are reported to the circuit breaker as they happen, so the circuit can open in the middle of a retry sequence."""
+    from app.services.circuit import CircuitBreaker
+    breaker = breaker or CircuitBreaker()
+
+    def slot(name: str, retries: int) -> tuple[str, GeminiLLM]:
+        def count_503(exc: BaseException) -> None:
+            if status_of(exc) == 503:
+                breaker.record_failure(name)
+        return name, make(model=name, api_key=settings.GEMINI_API_KEY, timeout_sec=settings.LLM_TIMEOUT_SEC, max_retries=retries,
+                          max_output_tokens=settings.LLM_MAX_OUTPUT_TOKENS, on_attempt_error=count_503)
+
+    models = [slot(settings.LLM_MODEL, settings.LLM_MAX_RETRIES), *(slot(n, 0) for n in settings.llm_fallback_models)]
+    return FallbackLLM(models, breaker)
+
+
 @lru_cache
-def _default() -> GeminiLLM:
-    return GeminiLLM(model=settings.LLM_MODEL, api_key=settings.GEMINI_API_KEY, timeout_sec=settings.LLM_TIMEOUT_SEC,
-                     max_retries=settings.LLM_MAX_RETRIES, max_output_tokens=settings.LLM_MAX_OUTPUT_TOKENS)
+def _default() -> FallbackLLM:
+    return build_chain()
 
 
 def get_llm() -> LLM:

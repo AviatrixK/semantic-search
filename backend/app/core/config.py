@@ -57,6 +57,11 @@ class Settings(BaseSettings):
     LLM_MODEL: str = "gemini-flash-latest"  # alias for the newest Flash model; pin an exact model id to freeze behaviour
     LLM_TIMEOUT_SEC: float = 30.0  # per attempt
     LLM_MAX_RETRIES: int = 2  # extra attempts on 429/5xx/timeouts (so up to 3 calls)
+    # Comma-separated models tried, in order and once each, when LLM_MODEL still fails after its retries (503/504/429/timeout).
+    # Empty = no fallback. Check ids with `python -m app.scripts.check_llm --models`. Example: gemini-2.5-flash-lite
+    LLM_FALLBACK_MODELS: str = ""
+    LLM_BREAKER_THRESHOLD: int = 3  # consecutive 503s from one model that open its circuit
+    LLM_BREAKER_COOLDOWN_SEC: int = 60  # how long an open circuit skips that model (shared through Redis)
     LLM_MAX_OUTPUT_TOKENS: int = 2048  # includes thinking tokens on thinking models
     RAG_TOP_K: int = 8  # transcript chunks given to the model
     AGENT_MAX_STEPS: int = 6  # tool-calling rounds before the agent must answer
@@ -80,6 +85,15 @@ class Settings(BaseSettings):
     @classmethod
     def _blank_is_unset(cls, v):
         return None if isinstance(v, str) and not v.strip() else v
+
+    @property
+    def llm_fallback_models(self) -> list[str]:
+        """LLM_FALLBACK_MODELS as a clean list: no blanks, no repeats, never the primary model itself."""
+        seen: list[str] = []
+        for name in (m.strip() for m in self.LLM_FALLBACK_MODELS.split(",")):
+            if name and name != self.LLM_MODEL and name not in seen:
+                seen.append(name)
+        return seen
 
     @property
     def is_production(self) -> bool:

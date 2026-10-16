@@ -78,8 +78,9 @@ def test_rag_mode_is_the_default_and_returns_answer_citations_route_and_usage(ro
     assert body["answer"] == "Use rhythm [1]. Pause more [2]. Invented."
     assert body["citations"][0] == {"n": 1, "video_id": VID, "title": "How to Speak", "start_sec": 283.0, "end_sec": 313.0}
     assert [c["n"] for c in body["citations"]] == [1, 2]
-    assert body["trace"] == [] and body["usage"] == {"llm_calls": 1, "tokens": 2}
-    assert set(body) == {"answer", "citations", "mode", "route", "route_reason", "trace", "usage"}
+    assert body["trace"] == [] and body["usage"] == {"llm_calls": 1, "tokens": 2, "model": "fake"}  # which model answered
+    assert set(body) == {"answer", "citations", "mode", "route", "route_reason", "trace", "usage", "degraded", "notice"}
+    assert body["degraded"] is False and body["notice"] is None
 
 
 def test_the_query_is_logged_with_mode_ask(route):
@@ -95,7 +96,7 @@ def test_without_matching_context_the_model_is_not_called(route):
     llm.set_llm(fake)
     r = route.post("/api/ask", json={"question": "Airspeed of a swallow?"})
     assert r.status_code == 200 and r.json()["answer"] == rag.NO_CONTEXT_ANSWER and r.json()["citations"] == []
-    assert fake.calls == [] and r.json()["usage"] == {"llm_calls": 0, "tokens": 0}
+    assert fake.calls == [] and r.json()["usage"] == {"llm_calls": 0, "tokens": 0, "model": None}
 
 
 @pytest.mark.parametrize("payload", [{}, {"question": ""}, {"question": "hi"}, {"question": "   "}, {"question": "x" * 1001},
@@ -106,9 +107,10 @@ def test_ask_validates_its_input(route, payload):
     assert route.post("/api/ask", json=payload).status_code == 422
 
 
-@pytest.mark.parametrize("error", [LLMUnavailable("api down key=SECRET"), LLMNotConfigured("no key"), LLMRejected("404 model SECRET"),
-                                   LLMEmptyResponse("finish_reason=SAFETY")])
+@pytest.mark.parametrize("error", [LLMNotConfigured("no key"), LLMRejected("404 model SECRET"), LLMEmptyResponse("finish_reason=SAFETY")])
 def test_llm_failures_become_503_with_a_safe_message(route, error):
+    """Problems an administrator or the asker must fix stay errors. An OUTAGE (LLMUnavailable) is answered with search
+    results instead: see tests/test_llm_fallback.py."""
     llm.set_llm(FakeLLM(error))
     r = route.post("/api/ask", json={"question": Q})
     assert r.status_code == 503 and r.json() == {"detail": error.user_message} and "SECRET" not in r.text
@@ -140,7 +142,7 @@ def test_agent_mode_runs_tools_and_returns_the_trace_and_checked_citations(route
     (step,) = body["trace"]
     assert (step["step"], step["tool"], step["summary"], step["error"]) == (1, "search_transcripts", "Found 2 clips", False)
     assert step["label"] == "Searching “sounding sure”" and step["args"] == {"query": "sounding sure"}
-    assert body["usage"] == {"llm_calls": 2, "tokens": 200}
+    assert body["usage"] == {"llm_calls": 2, "tokens": 200, "model": "fake"}
 
 
 def test_the_per_request_llm_call_cap_ends_a_runaway_agent_gracefully(route, monkeypatch):
@@ -272,12 +274,12 @@ def test_the_stream_logs_the_query_and_uses_memory(route):
 
 
 def test_stream_errors_arrive_as_events_with_safe_messages(route):
-    llm.set_llm(FakeLLM(LLMUnavailable("api down key=SECRET")))
+    llm.set_llm(FakeLLM(LLMRejected("404 model key=SECRET")))
     events = parse_sse(route.get("/api/ask/stream", params={"q": Q, "mode": "rag"}).text)
     names = [n for n, _ in events]
     assert names == ["route", "error", "done"]
     err = dict(events)["error"]
-    assert err["status"] == 503 and err["message"] == LLMUnavailable("x").user_message and "SECRET" not in json.dumps(events)
+    assert err["status"] == 503 and err["message"] == LLMRejected("x").user_message and "SECRET" not in json.dumps(events)
 
     llm.set_llm(ScriptedLLM([RuntimeError("secret internal detail at 10.0.0.1")]))
     events = parse_sse(route.get("/api/ask/stream", params={"q": Q, "mode": "agent"}).text)
@@ -470,3 +472,113 @@ def test_ask_with_nothing_relevant_in_the_database_skips_the_model(seeded):
 
 def test_orchestrator_module_is_what_both_endpoints_use():
     assert ask_routes.orchestrator is orchestrator
+
+
+# ---------------------------------------------------------------- AI outage: fallback model and graceful degradation
+from app.core import ratelimit  # noqa: E402
+from app.services.circuit import CircuitBreaker  # noqa: E402
+from app.services.llm import FallbackLLM, GeminiLLM, LLMOverloaded, LLMQuotaExceeded  # noqa: E402
+from tests.test_llm import ApiError, FakeClient, response  # noqa: E402
+
+
+def test_when_every_model_is_down_the_best_search_results_are_returned_instead_of_an_error(route):
+    llm.set_llm(FakeLLM(LLMOverloaded("503 high demand key=SECRET")))
+    r = route.post("/api/ask", json={"question": Q})
+    assert r.status_code == 200 and "SECRET" not in r.text
+    body = r.json()
+    assert body["degraded"] is True and body["notice"].startswith("The AI provider is overloaded right now")
+    assert body["answer"].startswith(body["notice"])
+    assert "[1] How to Speak at 04:43" in body["answer"] and "[2]" in body["answer"]  # clickable: the UI turns [n] into play buttons
+    assert [(c["n"], c["start_sec"], c["title"]) for c in body["citations"]] == [(1, 283.0, "How to Speak"), (2, 60.0, "How to Speak")]
+    assert (body["route"], body["route_reason"]) == ("search", "AI unavailable: showing search results")
+    assert body["usage"]["model"] is None  # no model answered
+
+
+@pytest.mark.parametrize("error,phrase", [(LLMOverloaded("x"), "overloaded"), (LLMQuotaExceeded("x"), "usage limit"),
+                                          (LLMUnavailable("x"), "can't be reached")])
+def test_the_notice_says_which_kind_of_outage_it_was(route, error, phrase):
+    llm.set_llm(FakeLLM(error))
+    notice = route.post("/api/ask", json={"question": Q}).json()["notice"]
+    assert phrase in notice and "SECRET" not in notice
+
+
+def test_degraded_answer_without_any_matching_moment_says_so(route):
+    """(rag never calls the model when nothing matches, so there is no outage to report there: the agent route does call it)"""
+    route.search.return_value = []
+    llm.set_llm(ScriptedLLM([LLMOverloaded("x")]))
+    body = route.post("/api/ask", json={"question": Q, "mode": "agent"}).json()
+    assert body["degraded"] is True and body["citations"] == []
+    assert "overloaded" in body["answer"] and "couldn't find anything" in body["answer"]
+
+
+@pytest.mark.parametrize("mode", ["agent", "auto"])
+def test_the_agent_and_auto_routes_degrade_too(route, mode):
+    llm.set_llm(ScriptedLLM([LLMOverloaded("x"), LLMOverloaded("x")], reply=LLMOverloaded("x")))
+    r = route.post("/api/ask", json={"question": Q, "mode": mode})
+    assert r.status_code == 200 and r.json()["degraded"] is True and r.json()["citations"]
+
+
+def test_a_degraded_answer_is_not_remembered_for_follow_up_questions(route):
+    llm.set_llm(FakeLLM(LLMOverloaded("x")))
+    route.post("/api/ask", json={"question": Q, "session_id": SID})
+    assert ChatMemory(client=route.redis).load(USER, SID) == []  # "AI unavailable ..." is not an answer to build on
+
+
+def test_problems_the_admin_must_fix_are_still_errors_not_search_results(route):
+    for error in (LLMNotConfigured("no key"), LLMRejected("404 model")):
+        llm.set_llm(FakeLLM(error))
+        assert route.post("/api/ask", json={"question": Q}).status_code == 503
+
+
+def test_the_stream_ends_with_a_degraded_answer_event_not_an_error(route):
+    llm.set_llm(FakeLLM(LLMQuotaExceeded("x")))
+    events = parse_sse(route.get("/api/ask/stream", params={"q": Q, "mode": "rag"}).text)
+    assert [n for n, _ in events] == ["route", "answer", "done"]
+    answer = dict(events)["answer"]
+    assert answer["degraded"] is True and "usage limit" in answer["notice"] and answer["citations"]
+
+
+def real_chain(primary, fallback, redis):
+    """The real FallbackLLM + GeminiLLM, only the SDK client is fake."""
+    breaker = CircuitBreaker(client=redis, threshold=3, cooldown_sec=60)
+    models = [("test-model", GeminiLLM(model="test-model", api_key="k", timeout_sec=5, max_retries=2, max_output_tokens=10,
+                                       client=primary, sleep=lambda s: None, jitter=lambda: 1.0,
+                                       on_attempt_error=lambda e: breaker.record_failure("test-model") if getattr(e, "code", None) == 503 else None)),
+              ("fb-model", GeminiLLM(model="fb-model", api_key="k", timeout_sec=5, max_retries=0, max_output_tokens=10, client=fallback,
+                                     sleep=lambda s: None, jitter=lambda: 1.0))]
+    return FallbackLLM(models, breaker)
+
+
+def test_a_fallback_answer_reports_which_model_answered_in_the_usage(route):
+    primary, fallback = FakeClient(*[ApiError(503)] * 3), FakeClient(response("Use rhythm [1]."))
+    llm.set_llm(real_chain(primary, fallback, route.redis))
+    body = route.post("/api/ask", json={"question": Q}).json()
+    assert body["degraded"] is False and body["answer"] == "Use rhythm [1]."
+    assert body["usage"]["model"] == "fb-model" and body["usage"]["llm_calls"] == 1  # one AI call, answered by the fallback
+    assert len(primary.calls) == 3 and len(fallback.calls) == 1
+
+
+def test_the_primary_model_is_reported_when_it_answers(route):
+    llm.set_llm(real_chain(FakeClient(response("Fine [1].")), FakeClient(), route.redis))
+    assert route.post("/api/ask", json={"question": Q}).json()["usage"]["model"] == "test-model"
+
+
+def test_every_real_model_503ing_degrades_and_trips_the_circuit_for_the_next_question(route):
+    primary, fallback = FakeClient(*[ApiError(503)] * 3), FakeClient(ApiError(503), ApiError(503))
+    llm.set_llm(real_chain(primary, fallback, route.redis))
+    first = route.post("/api/ask", json={"question": Q}).json()
+    assert first["degraded"] is True and "overloaded" in first["notice"]
+    second = route.post("/api/ask", json={"question": Q}).json()  # the primary's circuit is open: it is not even called
+    assert second["degraded"] is True and len(primary.calls) == 3 and len(fallback.calls) == 2
+
+
+def test_our_own_rate_limit_is_worded_differently_from_the_providers_limit():
+    with patch.object(ratelimit, "hit", return_value=7):
+        with pytest.raises(ratelimit.HTTPException) as ours:
+            ratelimit.enforce("ask", USER, 10, what="questions")
+        with pytest.raises(ratelimit.HTTPException) as generic:
+            ratelimit.enforce("search", USER, 30)
+    assert ours.value.status_code == 429 and ours.value.headers == {"Retry-After": "7"}
+    assert "questions too quickly" in ours.value.detail and "limit: 10 per minute" in ours.value.detail and "7 seconds" in ours.value.detail
+    assert "AI" not in ours.value.detail and generic.value.detail == "Too many requests. Try again in 7 seconds."
+    assert "usage limit" in LLMQuotaExceeded("x").user_message and "questions" not in LLMQuotaExceeded("x").user_message

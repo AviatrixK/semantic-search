@@ -43,11 +43,14 @@ def hit(key: str, limit: int, window: int = WINDOW_SEC, *, client=None, now: flo
     return None
 
 
-def enforce(name: str, identity: str, limit: int) -> None:
+def enforce(name: str, identity: str, limit: int, what: str | None = None) -> None:
+    """`what` names the thing being limited, so the message says whose limit this is ("questions": ours, as opposed to the AI
+    provider's own usage limit, which Ask reports separately)."""
     retry_after = hit(f"{name}:{identity}", limit)
     if retry_after is not None:
-        raise HTTPException(429, f"Too many requests. Try again in {retry_after} seconds.",
-                            headers={"Retry-After": str(retry_after)})
+        message = (f"You're sending {what} too quickly (limit: {limit} per minute). Try again in {retry_after} seconds."
+                   if what else f"Too many requests. Try again in {retry_after} seconds.")
+        raise HTTPException(429, message, headers={"Retry-After": str(retry_after)})
 
 
 def login_rate_limit(request: Request, body: LoginIn) -> None:
@@ -63,4 +66,4 @@ def search_rate_limit(user: CurrentUser = Depends(current_user)) -> None:
 
 def ask_rate_limit(user: CurrentUser = Depends(current_user)) -> None:
     """For /api/ask (Phase 8)."""
-    enforce("ask", user.id, settings.RATE_ASK_PER_MIN)
+    enforce("ask", user.id, settings.RATE_ASK_PER_MIN, what="questions")

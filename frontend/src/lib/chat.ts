@@ -22,7 +22,9 @@ export interface AssistantMessage {
   routeReason: string | null
   /** The agent's steps: filled in live while pending, complete when done. */
   trace: TraceStep[]
-  usage: { llmCalls: number; tokens: number } | null
+  usage: { llmCalls: number; tokens: number; model?: string } | null
+  /** The AI was unavailable, so `text` is the most relevant search results (with clickable timestamps) instead of an answer. */
+  degraded?: boolean
 }
 
 export type ChatMessage = UserMessage | AssistantMessage
@@ -37,7 +39,8 @@ export interface AnswerPayload {
   route: Route
   routeReason: string
   trace: TraceStep[]
-  usage: { llmCalls: number; tokens: number }
+  usage: { llmCalls: number; tokens: number; model?: string }
+  degraded?: boolean
 }
 
 export type ChatAction =
@@ -107,7 +110,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
     case 'answered':
       return patch(state, action.id, 'pending', () => ({
         status: 'done', text: action.text, citations: action.citations, error: null, route: action.route, routeReason: action.routeReason,
-        trace: action.trace, usage: action.usage,
+        trace: action.trace, usage: action.usage, degraded: action.degraded === true,
       }))
     case 'failed':
       return patch(state, action.id, 'pending', () => ({ status: 'error', error: action.message }))
@@ -171,9 +174,11 @@ function messageOf(v: unknown): ChatMessage | null {
   const route = isRoute(m.route) ? m.route : null
   const routeReason = isStr(m.routeReason) ? m.routeReason : null
   const u = m.usage as Record<string, unknown> | null | undefined
-  const usage = u && isNum(u.llmCalls) && isNum(u.tokens) ? { llmCalls: u.llmCalls, tokens: u.tokens } : null
+  const usage = u && isNum(u.llmCalls) && isNum(u.tokens)
+    ? { llmCalls: u.llmCalls, tokens: u.tokens, ...(isStr(u.model) && u.model ? { model: u.model } : {}) }
+    : null
   const base = { id: m.id, role: 'assistant' as const, question: m.question, route, routeReason }
-  if (m.status === 'done') return { ...base, status: 'done', text: m.text, citations, error: null, trace, usage }
+  if (m.status === 'done') return { ...base, status: 'done', text: m.text, citations, error: null, trace, usage, degraded: m.degraded === true }
   if (m.status === 'error' && isStr(m.error)) return { ...base, status: 'error', text: '', citations: [], error: m.error, trace, usage: null }
   if (interrupted) {
     // The request died with the page: show it as failed so it can be retried.

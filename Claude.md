@@ -197,6 +197,15 @@ and jump to timestamps; a Gemini tool-calling agent answers multi-step questions
   not match the file an admin re-uploads). Prod compose rotates logs for all six services (json-file 10m x 3; tested on the resolved
   config). `Makefile` (`make ps | logs [s=worker] | deploy | shell-api`) wraps `docker compose --env-file .env.prod -f
   docker-compose.prod.yml`.
+- **AI outage handling (Round 4).** `services/llm.py::FallbackLLM` wraps one `GeminiLLM` per model: `LLM_MODEL` (own `LLM_MAX_RETRIES`)
+  then each `LLM_FALLBACK_MODELS` entry ONCE; it fails over only on `LLMUnavailable` (503 `LLMOverloaded`, 429 `LLMQuotaExceeded`, 504/timeout/
+  network); bad key/unknown model/empty answer are NOT outages and raise at once. `services/circuit.py::CircuitBreaker` (Redis keys
+  `llm:cb:fail|open:<model>`, fail-open): 3 consecutive 503s (counted per attempt, via `GeminiLLM(on_attempt_error=...)`) open a model for 60 s
+  for every worker; after the cooldown one more 503 re-opens it at once. A fallback turn gets history WITHOUT the primary's `raw` provider
+  objects (thought signatures). If every model fails, `orchestrator.ask` answers with `hybrid_search` results (`degraded=True`, `notice`,
+  clickable `[n]`, route "search", NOT saved to chat memory); NotConfigured/Rejected/Empty stay 503 errors. `usage.model` = the model that
+  answered (shown as "1 AI call · N tokens · model"). Own rate limit text ("You're sending questions too quickly...") differs from the
+  provider's quota text; Ask shows the server's 429 message. `GET /api/ask*` response gains `degraded`, `notice`, `usage.model`.
 - **Worker threads and search timing.** `WHISPER_THREADS` (default 1, faster-whisper `cpu_threads`) and `TORCH_THREADS` (default 1,
   `torch.set_num_threads` in `worker_process_init`) keep one of the server's 2 CPUs free for the API; raise both on a bigger machine.
   `/api/search` sends `Server-Timing` (log, embed, vector_sql, keyword_sql, hl_lookup, hl_embed, rerank, total; visible in DevTools >

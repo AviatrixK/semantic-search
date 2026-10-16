@@ -112,7 +112,9 @@ export function useChat() {
             const a = e.answer
             dispatch({
               type: 'answered', id, text: a.answer, citations: a.citations, route: a.route, routeReason: a.route_reason,
-              trace: fromServerTrace(a.trace), usage: { llmCalls: a.usage.llm_calls, tokens: a.usage.tokens },
+              trace: fromServerTrace(a.trace),
+              usage: { llmCalls: a.usage.llm_calls, tokens: a.usage.tokens, ...(a.usage.model ? { model: a.usage.model } : {}) },
+              degraded: a.degraded === true,
             })
           } else if (e.type === 'error') {
             settled = true

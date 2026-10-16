@@ -6,6 +6,7 @@ import {
   serializeMessages,
 } from '../.test-build/lib/chat.js'
 import { ApiError, describeError } from '../.test-build/api/errors.js'
+import { usageLine } from '../.test-build/lib/format.js'
 
 const cite = (n, extra = {}) => ({ n, video_id: `vid-${n}`, title: `Video ${n}`, start_sec: n * 30, end_sec: n * 30 + 30, ...extra })
 const run = (...actions) => actions.reduce((s, a) => chatReducer(s, a), initialChat)
@@ -136,7 +137,11 @@ test('only the most recent messages are kept', () => {
 test('describeError (ask): the backend 503 reason is shown, 429 uses Retry-After, others are generic', () => {
   assert.equal(describeError(new ApiError(503, 'Ask is not set up yet: an administrator needs to configure GEMINI_API_KEY.'), 'ask'),
     'Ask is not set up yet: an administrator needs to configure GEMINI_API_KEY.')
-  assert.equal(describeError(new ApiError(429, 'Too many', 20), 'ask'), 'Too many attempts. Please wait 20 seconds and try again.')
+  // 429 in Ask: the server's own message says WHICH limit it is; without one the generic Retry-After wording is used
+  assert.equal(describeError(new ApiError(429, "You're sending questions too quickly (limit: 10 per minute). Try again in 20 seconds.", 20), 'ask'),
+    "You're sending questions too quickly (limit: 10 per minute). Try again in 20 seconds.")
+  assert.equal(describeError(new ApiError(429, '', 20), 'ask'), 'Too many attempts. Please wait 20 seconds and try again.')
+  assert.equal(describeError(new ApiError(429, 'x', 20), 'login'), 'Too many attempts. Please wait 20 seconds and try again.')
   assert.match(describeError(new ApiError(500, 'boom'), 'ask'), /went wrong on the server/)
   assert.equal(describeError(new ApiError(422, 'Question is too short'), 'ask'), 'Question is too short')
   assert.match(describeError(new ApiError(503, 'x')), /went wrong on the server/) // outside "ask" a 503 stays generic
@@ -230,4 +235,37 @@ test('newSessionId makes ids the server accepts', () => {
 test('isValidSessionId matches the backend pattern', () => {
   for (const ok of ['abcdefgh', 'a-b_c-D1234567', 'x'.repeat(64)]) assert.equal(isValidSessionId(ok), true, ok)
   for (const bad of ['short', 'has space here', 'x'.repeat(65), 'semi;colon-1234', '', null, undefined, 12345678]) assert.equal(isValidSessionId(bad), false, String(bad))
+})
+
+// ---- AI outage: fallback model shown in the usage line, degraded answers
+test('usageLine shows the model that answered, so a fallback is visible', () => {
+  assert.equal(usageLine({ llmCalls: 1, tokens: 523, model: 'gemini-2.5-flash-lite' }), '1 AI call · 523 tokens · gemini-2.5-flash-lite')
+  assert.equal(usageLine({ llmCalls: 3, tokens: 12345, model: 'gemini-flash-latest' }), '3 AI calls · 12,345 tokens · gemini-flash-latest')
+  assert.equal(usageLine({ llmCalls: 1, tokens: 7 }), '1 AI call · 7 tokens') // older answers and servers without a model name
+  assert.equal(usageLine({ llmCalls: 1, tokens: 7, model: null }), '1 AI call · 7 tokens')
+  assert.equal(usageLine({ llmCalls: 0, tokens: 0, model: null }), null) // no model was called: no line
+  assert.equal(usageLine(null), null)
+})
+
+test('a degraded answer says the AI was unavailable instead of showing token numbers', () => {
+  assert.match(usageLine({ llmCalls: 1, tokens: 0, model: null }, true), /^AI unavailable/)
+  assert.match(usageLine(null, true), /search results/)
+})
+
+test('the answer keeps the model and the degraded flag, and both survive a page reload', () => {
+  const a = run(send(), answered('a1', 'Fine [1].', [cite(1)], { usage: { llmCalls: 1, tokens: 523, model: 'gemini-2.5-flash-lite' } })).messages[1]
+  assert.equal(a.usage.model, 'gemini-2.5-flash-lite')
+  assert.equal(a.degraded, false)
+  const d = run(send(), answered('a1', 'The AI provider is overloaded right now (high demand). Here are the most relevant moments from the videos instead. [1] How to Speak at 04:43: “x”',
+    [cite(1)], { route: 'search', degraded: true, usage: { llmCalls: 1, tokens: 0 } }))
+  const back = restoreMessages(serializeMessages(d.messages))[1]
+  assert.equal(back.degraded, true)
+  assert.equal(back.citations.length, 1) // the timestamps stay clickable
+  assert.equal(restoreMessages(serializeMessages(run(send(), answered('a1', 'ok', [], { usage: { llmCalls: 1, tokens: 5, model: 'm' } })).messages))[1].usage.model, 'm')
+})
+
+test('stored conversations from before this change load without a model or a degraded flag', () => {
+  const old = JSON.stringify([{ id: 'a1', role: 'assistant', status: 'done', question: 'q', text: 'fine', citations: [], usage: { llmCalls: 1, tokens: 9 } }])
+  const [m] = restoreMessages(old)
+  assert.deepEqual([m.usage, m.degraded], [{ llmCalls: 1, tokens: 9 }, false])
 })

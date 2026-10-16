@@ -66,7 +66,11 @@ export type ErrorContext = 'login' | 'register' | 'upload' | 'reprocess' | 'dele
 export function describeError(err: unknown, context?: ErrorContext): string {
   if (err instanceof NetworkError) return "Can't reach the server. Check that the backend is running and try again."
   if (err instanceof ApiError) {
-    if (err.status === 429) return rateLimitMessage(err.retryAfter)
+    if (err.status === 429) {
+      // Ask: the server's own words say WHICH limit it is (our per-minute limit, or today's AI usage budget); elsewhere stay generic.
+      if (context === 'ask' && err.message) return err.message
+      return rateLimitMessage(err.retryAfter)
+    }
     if (context === 'upload') {
       if (err.status === 413) {
         const mb = /max (\d+) MB/i.exec(err.message)?.[1] // backend: "File too large (max 500 MB)"

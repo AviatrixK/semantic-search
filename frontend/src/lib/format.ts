@@ -34,6 +34,18 @@ const STAGE_LABELS: Record<string, string> = {
   failed: 'Failed',
 }
 
+/**
+ * The small line under an answer. Normal: "1 AI call · 523 tokens · gemini-2.5-flash-lite" (the model that answered, which
+ * is a fallback when the primary was unavailable). Degraded (the AI was down): says so instead. null: nothing to show.
+ */
+export function usageLine(usage: { llmCalls: number; tokens: number; model?: string | null } | null, degraded = false): string | null {
+  if (degraded) return 'AI unavailable · showing the most relevant search results instead'
+  if (!usage || usage.llmCalls <= 0) return null
+  const parts = [`${usage.llmCalls} AI call${usage.llmCalls === 1 ? '' : 's'}`, `${usage.tokens.toLocaleString('en-US')} tokens`]
+  if (usage.model) parts.push(usage.model)
+  return parts.join(' · ')
+}
+
 export function stageLabel(stage: string): string {
   return STAGE_LABELS[stage] ?? stage
 }

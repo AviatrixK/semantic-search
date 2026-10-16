@@ -44,7 +44,8 @@ def to_out(result: orchestrator.AskResult) -> AskOut:
         answer=result.answer, mode=result.requested, route=result.route, route_reason=result.route_reason,
         citations=[CitationOut(**c.__dict__) for c in result.citations],
         trace=[TraceStepOut(**s.__dict__) for s in result.trace],
-        usage=UsageOut(llm_calls=result.llm_calls, tokens=result.tokens),
+        usage=UsageOut(llm_calls=result.llm_calls, tokens=result.tokens, model=result.model),
+        degraded=result.degraded, notice=result.notice,
     )
 
 

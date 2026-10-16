@@ -87,5 +87,9 @@ export interface AskOut {
   route: 'search' | 'rag' | 'agent'
   route_reason: string
   trace: TraceStepOut[]
-  usage: { llm_calls: number; tokens: number }
+  /** `model`: the model that answered (a fallback model when the primary was unavailable); null when no model answered. */
+  usage: { llm_calls: number; tokens: number; model?: string | null }
+  /** The AI was unavailable: `answer` is the most relevant search results instead, `notice` says why. */
+  degraded?: boolean
+  notice?: string | null
 }

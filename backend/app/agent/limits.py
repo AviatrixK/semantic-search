@@ -22,6 +22,7 @@ class CallBudget:
         self.max_calls = max_calls
         self.calls = 0
         self.tokens = 0
+        self.model: str | None = None  # the model that produced the most recent answer (may be a fallback)
         self._lock = threading.Lock()
 
     def take(self) -> None:
@@ -30,9 +31,11 @@ class CallBudget:
                 raise CallCapExceeded(f"limit of {self.max_calls} model calls per request reached")
             self.calls += 1
 
-    def record(self, tokens: int) -> None:
+    def record(self, tokens: int, model: str | None = None) -> None:
         with self._lock:
             self.tokens += tokens
+            if model:
+                self.model = model
 
 
 class MeteredLLM:
@@ -54,21 +57,21 @@ class MeteredLLM:
             raise DailyBudgetExceeded(self._meter.seconds_until_reset())
         self.budget.take()
 
-    def _after(self, total_tokens: int | None, fallback_chars: int) -> None:
+    def _after(self, total_tokens: int | None, fallback_chars: int, model: str | None = None) -> None:
         tokens = total_tokens if total_tokens is not None else estimate_tokens("x" * fallback_chars)
-        self.budget.record(tokens)
+        self.budget.record(tokens, model)
         if self._meter and self._user_id:
             self._meter.add(self._user_id, tokens)
 
     def generate(self, *, system: str, prompt: str) -> LLMResult:
         self._guard()
         result = self._inner.generate(system=system, prompt=prompt)
-        self._after(result.total_tokens, len(system) + len(prompt) + len(result.text))
+        self._after(result.total_tokens, len(system) + len(prompt) + len(result.text), result.model)
         return result
 
     def generate_turn(self, *, system: str, messages: list[Message], tools: list[ToolSpec] | None = None,
                       allow_tools: bool = True) -> TurnResult:
         self._guard()
         turn = self._inner.generate_turn(system=system, messages=messages, tools=tools, allow_tools=allow_tools)
-        self._after(turn.total_tokens, len(system) + 600 * len(messages) + len(turn.text or ""))
+        self._after(turn.total_tokens, len(system) + 600 * len(messages) + len(turn.text or ""), turn.model)
         return turn
