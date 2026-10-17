@@ -2,7 +2,6 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createApiClient } from '../.test-build/api/client.js'
 import { ApiError, NetworkError } from '../.test-build/api/errors.js'
-import { parseAskEvent } from '../.test-build/lib/askStream.js'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const enc = new TextEncoder()
@@ -33,12 +32,12 @@ const sse = (event, data) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n
 test('stream: sends the bearer token and Accept: text/event-stream, and resolves when the server ends the stream', async () => {
   const { client, calls } = setup(() => {
     const s = controlledStream()
-    s.push(sse('route', { route: 'rag' })); s.push(sse('done', {})); s.close()
+    s.push(sse('job', { stage: 'queued' })); s.push(sse('done', {})); s.close()
     return s.response
   })
   const got = []
-  await client.stream('/api/ask/stream?q=x', { onEvent: (e) => got.push(e.event) })
-  assert.deepEqual(got, ['route', 'done'])
+  await client.stream('/api/jobs/events', { onEvent: (e) => got.push(e.event) })
+  assert.deepEqual(got, ['job', 'done'])
   assert.equal(calls[0].auth, 'Bearer tok')
   assert.equal(calls[0].init.headers.Accept, 'text/event-stream')
   assert.equal(calls[0].init.credentials, 'include')
@@ -95,13 +94,13 @@ test('stream: a 401 before the stream refreshes the token once and retries', asy
   assert.deepEqual(got, ['done'])
 })
 
-test('stream: errors before the stream are ordinary ApiErrors with Retry-After (daily budget, rate limit, validation)', async () => {
+test('stream: errors before the stream are ordinary ApiErrors with Retry-After (rate limit, validation)', async () => {
   for (const [status, headers, check] of [
     [429, { 'Retry-After': '42' }, (e) => e.retryAfter === 42],
-    [422, {}, (e) => e.message === 'Question is too short'],
+    [422, {}, (e) => e.message === 'Invalid request'],
     [503, {}, (e) => e.status === 503],
   ]) {
-    const { client } = setup(() => json({ detail: status === 422 ? 'Question is too short' : 'nope' }, status, headers))
+    const { client } = setup(() => json({ detail: status === 422 ? 'Invalid request' : 'nope' }, status, headers))
     let seen = false
     await assert.rejects(client.stream('/x', { onEvent: () => { seen = true } }), (e) => e instanceof ApiError && e.status === status && check(e))
     assert.equal(seen, false)
@@ -113,7 +112,7 @@ test('stream: aborting mid-stream rejects with AbortError', async () => {
   const { client } = setup((c) => {
     const s = controlledStream()
     c.init.signal.addEventListener('abort', () => s.fail(new DOMException('Aborted', 'AbortError')))
-    s.push(sse('route', { route: 'agent' }))
+    s.push(sse('job', { stage: 'embedding' }))
     return s.response
   })
   const p = client.stream('/x', { signal: ctrl.signal, onEvent: () => {} })
@@ -137,31 +136,4 @@ test('stream: a connection that drops mid-stream becomes a NetworkError, after d
 test('stream: a response without a body (very old browsers) is a clear NetworkError', async () => {
   const { client } = setup(() => ({ ok: true, status: 200, headers: new Headers(), body: null }))
   await assert.rejects(client.stream('/x', { onEvent: () => {} }), (e) => e instanceof NetworkError && /cannot read streamed/.test(e.message))
-})
-
-// ---- typed events
-const ev = (event, data) => ({ event, data: JSON.stringify(data) })
-const OUT = { answer: 'A [1]', citations: [], mode: 'auto', route: 'agent', route_reason: 'comparison', trace: [], usage: { llm_calls: 2, tokens: 10 } }
-
-test('parseAskEvent: every event type, with defaults for optional fields', () => {
-  assert.deepEqual(parseAskEvent(ev('route', { route: 'agent', requested: 'auto', reason: 'comparison' })),
-    { type: 'route', route: 'agent', requested: 'auto', reason: 'comparison' })
-  assert.deepEqual(parseAskEvent(ev('step_start', { step: 1, index: 0, tool: 'search_transcripts', label: 'Searching', args: { query: 'x' } })),
-    { type: 'step_start', step: 1, index: 0, tool: 'search_transcripts', label: 'Searching', args: { query: 'x' } })
-  assert.deepEqual(parseAskEvent(ev('step_result', { step: 1, index: 0, tool: 't', summary: 'Found 5 clips', latency_ms: 120, error: false })),
-    { type: 'step_result', step: 1, index: 0, tool: 't', summary: 'Found 5 clips', latency_ms: 120, error: false })
-  assert.deepEqual(parseAskEvent(ev('step_result', { step: 1, index: 0, tool: 't', summary: 's' })), { type: 'step_result', step: 1, index: 0, tool: 't', summary: 's', latency_ms: 0, error: false })
-  assert.equal(parseAskEvent(ev('answer', OUT)).answer.answer, 'A [1]')
-  assert.deepEqual(parseAskEvent(ev('error', { message: 'Busy', status: 429, retry_after: 30 })), { type: 'error', message: 'Busy', status: 429, retryAfter: 30 })
-  assert.deepEqual(parseAskEvent(ev('error', { message: 'Oops' })), { type: 'error', message: 'Oops', status: undefined, retryAfter: undefined })
-  assert.deepEqual(parseAskEvent(ev('done', {})), { type: 'done' })
-})
-
-test('parseAskEvent: malformed or unknown events are ignored, never thrown', () => {
-  for (const bad of [
-    { event: 'route', data: 'not json' }, { event: 'route', data: '[]' }, { event: 'route', data: 'null' }, ev('route', { route: 'magic' }),
-    ev('step_start', { step: 'one' }), ev('step_start', { step: 1, index: 0, tool: 't' }), ev('step_result', { step: 1 }),
-    ev('answer', { answer: 5 }), ev('answer', { answer: 'x', citations: 'no', route: 'rag' }), ev('answer', { answer: 'x', citations: [], route: 'nope' }),
-    ev('error', {}), ev('mystery', { a: 1 }), { event: 'message', data: '{}' },
-  ]) assert.equal(parseAskEvent(bad), null, JSON.stringify(bad))
 })

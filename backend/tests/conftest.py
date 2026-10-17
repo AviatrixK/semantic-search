@@ -48,22 +48,9 @@ os.environ.update({
     "MAX_UPLOAD_MB": "1",
     "RATE_LOGIN_PER_MIN": "5",
     "RATE_SEARCH_PER_MIN": "30",
-    "RATE_ASK_PER_MIN": "10",
     "MIN_SCORE": "0.25",
     "EMBED_CACHE_TTL_SEC": "86400",
-    "LLM_MODEL": "test-model",
-    "LLM_TIMEOUT_SEC": "5",
-    "LLM_MAX_RETRIES": "2",
-    "LLM_MAX_OUTPUT_TOKENS": "256",
-    "RAG_TOP_K": "8",
-    "AGENT_MAX_STEPS": "6",
-    "AGENT_MAX_LLM_CALLS": "8",
-    "AGENT_TOOL_RESULT_TOKENS": "1500",
-    "DAILY_TOKEN_BUDGET": "50000",
-    "CHAT_MEMORY_TURNS": "3",
-    "CHAT_MEMORY_TTL_SEC": "3600",
     "SSE_KEEPALIVE_SEC": "0.2",
-    "GEMINI_API_KEY": "",
 })
 
 # /db/init.sql inside the api container (compose mounts ./db there); <repo>/db/init.sql on the host.

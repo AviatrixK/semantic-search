@@ -5,7 +5,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import ask, auth, jobs, search, videos
+from app.api.routes import auth, jobs, search, videos
 from app.core.config import settings
 from app.core.logging import setup_logging
 from app.services import embedding, storage
@@ -35,7 +35,6 @@ app.include_router(auth.router)
 app.include_router(jobs.router)  # before videos: /api/jobs/events must win over /api/jobs/{job_id}
 app.include_router(videos.router)
 app.include_router(search.router)
-app.include_router(ask.router)
 
 
 @app.get("/health")

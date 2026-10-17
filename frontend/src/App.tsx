@@ -14,11 +14,10 @@ import Login from './pages/Login'
 import NotFound from './pages/NotFound'
 import Register from './pages/Register'
 import Search from './pages/Search'
-import { loadAdmin, loadAsk, loadWatch } from './routes'
+import { loadAdmin, loadWatch } from './routes'
 import styles from './App.module.css'
 
-// Loaded on demand: the first screen (search, library, login) does not pay for the chat, the player page or the admin tools.
-const Ask = lazy(loadAsk)
+// Loaded on demand: the first screen (search, library, login) does not pay for the player page or the admin tools.
 const Watch = lazy(loadWatch)
 const AdminVideos = lazy(loadAdmin)
 
@@ -79,14 +78,6 @@ export default function App() {
           element={
             <ProtectedRoute>
               <Search />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/ask"
-          element={
-            <ProtectedRoute>
-              <Ask />
             </ProtectedRoute>
           }
         />

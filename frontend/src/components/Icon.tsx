@@ -2,7 +2,6 @@ import type { ReactNode } from 'react'
 
 const PATHS: Record<string, ReactNode> = {
   home: <path d="M4 11.5 12 4l8 7.5V20a1 1 0 0 1-1 1h-4.5v-6h-5v6H5a1 1 0 0 1-1-1z" />,
-  ask: <path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8zM19 16l.8 2.2L22 19l-2.2.8L19 22l-.8-2.2L16 19l2.2-.8z" />,
   library: <path d="M5 4h4v16H5zM11 4h4v16h-4zM17.2 5.3l3.6-1 3 14.6-3.6 1z" transform="translate(-1.5 0)" />,
   admin: <path d="M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7zM19 12l2-1.2-2-3.5-2.3.8a7 7 0 0 0-1.6-.9L14.7 4h-4l-.4 2.2a7 7 0 0 0-1.6.9l-2.3-.8-2 3.5L6 12a7 7 0 0 0 0 1.9l-1.9 1.3 2 3.5 2.3-.8c.5.4 1 .7 1.6.9l.4 2.2h4l.4-2.2c.6-.2 1.1-.5 1.6-.9l2.3.8 2-3.5z" />,
   search: <path d="M10.5 4a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zM15.5 15.5 21 21" />,

@@ -1,5 +1,4 @@
-"""Pure helpers for the evaluation scripts: gold-set loading, time parsing, overlap, rank metrics, citation precision and judge-reply
-parsing. No database, no models, no network: everything here is unit-tested in tests/test_eval_metrics.py."""
+"""Pure helpers for the evaluation scripts: gold-set loading, time parsing, overlap, rank metrics and reporting. No database, no models, no network: everything here is unit-tested in tests/test_eval_metrics.py."""
 import json
 import re
 import statistics
@@ -149,13 +148,6 @@ def retrieval_summary(ranks: list[int | None], latencies_ms: list[float]) -> dic
     }
 
 
-def citation_precision(citations: list, golds: list[Gold]) -> float | None:
-    """Share of the answer's citations whose range overlaps a gold range. None when there are no citations (nothing to judge)."""
-    if not citations:
-        return None
-    return sum(1 for c in citations if matches_any(c.video_id, c.start_sec, c.end_sec, golds)) / len(citations)
-
-
 def mean(values: list[float | int | None]) -> float | None:
     kept = [v for v in values if v is not None]
     return sum(kept) / len(kept) if kept else None
@@ -164,35 +156,6 @@ def mean(values: list[float | int | None]) -> float | None:
 def median(values: list[float | int | None]) -> float | None:
     kept = [v for v in values if v is not None]
     return statistics.median(kept) if kept else None
-
-
-# ---------------------------------------------------------------- judge reply
-def parse_judge(text: str) -> dict | None:
-    """{'groundedness': 1-5 or None, 'relevance': 1-5, 'reason': str} from the judge's reply, tolerating code fences and
-    chatter around the JSON. None when no usable scores are found (the caller counts it as a judge failure)."""
-    start, end = text.find("{"), text.rfind("}")
-    if start < 0 or end <= start:
-        return None
-    try:
-        data = json.loads(text[start:end + 1])
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(data, dict):
-        return None
-
-    def score(value) -> int | None:
-        if isinstance(value, bool):
-            return None
-        if isinstance(value, str) and value.strip().isdigit():
-            value = int(value.strip())
-        if isinstance(value, float) and value.is_integer():
-            value = int(value)
-        return value if isinstance(value, int) and 1 <= value <= 5 else None
-
-    groundedness, relevance = score(data.get("groundedness")), score(data.get("relevance"))
-    if groundedness is None or relevance is None:
-        return None
-    return {"groundedness": groundedness, "relevance": relevance, "reason": str(data.get("reason", ""))[:300]}
 
 
 # ---------------------------------------------------------------- reporting

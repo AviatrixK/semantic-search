@@ -1,21 +1,20 @@
 # CLAUDE.md — Semantic Video Search
 
 ## What this is
-Agentic RAG over video. Admin uploads video → Celery worker runs ffmpeg → faster-whisper → chunking
+Semantic search over video. Admin uploads video → Celery worker runs ffmpeg → faster-whisper → chunking
 (~30s windows, 5s overlap) → sentence-transformers embeddings → Postgres+pgvector. Users search by meaning
-and jump to timestamps; a Gemini tool-calling agent answers multi-step questions with citations.
+and jump to timestamps. (There is no question-answering / LLM feature: Ask was removed, see the "Ask was removed" bullet.)
 
 ## Stack (do not change without asking)
 - Backend: Python 3.11, FastAPI, SQLAlchemy 2.0, Pydantic v2, pydantic-settings
 - DB: Postgres 16 + pgvector (schema in `db/init.sql`; HNSW cosine index; generated `tsv` column)
 - Queue: Celery + Redis. Storage: SeaweedFS (S3 API on :9000 via boto3; compose service is still named `minio`)
 - ML: faster-whisper, sentence-transformers `all-MiniLM-L6-v2` (EMBED_DIM=384)
-- LLM: Gemini via `google-genai`. Agent is a HAND-ROLLED loop — no LangChain/LangGraph unless asked
 - Frontend: React + Vite + TypeScript, react-router, plain CSS modules (no UI kit unless asked)
 - Auth: JWT access token (15 min, kept in memory) + rotating refresh token (httpOnly cookie, hashed in DB)
 
 ## Architecture rules
-- Routes are thin. Business logic lives in `app/services/`. Agent tools call services, never raw SQL.
+- Routes are thin. Business logic lives in `app/services/`.
 - Heavy models load once per process (`lru_cache`), never per request.
 - Every new endpoint has auth (`current_user` or `require_admin`) unless explicitly public.
 - Config only via `app/core/config.py` + `.env`. Never hardcode secrets or URLs.
@@ -63,7 +62,7 @@ and jump to timestamps; a Gemini tool-calling agent answers multi-step questions
 - **Auth rules:** passwords need 8+ chars with a letter and a digit (max 72 bytes: bcrypt limit). Refresh tokens are single-use
   (atomic claim); presenting a revoked one revokes ALL of that user's tokens. Missing/invalid access token -> 401 (never 403).
   Rate limits (Redis fixed window, `app/core/ratelimit.py`, fail-open if Redis is down): login 5/min per IP+email, search 30/min
-  and ask 10/min per user -> 429 + `Retry-After`. Expired refresh tokens are purged hourly by Celery beat (worker runs with `-B`).
+  per user -> 429 + `Retry-After`. Expired refresh tokens are purged hourly by Celery beat (worker runs with `-B`).
 - **Tests:** unit tests need no services. Integration tests use the `svs_test` database (rebuilt from `db/init.sql` each session,
   truncated per test) and Redis db 15 (flushed per test); conftest forces both and refuses anything else, so dev data and
   dev limiter state are never touched. Create the DB once on an existing volume:
@@ -87,17 +86,16 @@ and jump to timestamps; a Gemini tool-calling agent answers multi-step questions
   that starts mid-sentence still yields a lowercase first fragment: its own text cannot complete it. **Changing the splitter makes
   stored `chunk_sentences` stale (search then falls back to slow on-the-fly embedding): re-run `backfill_sentences`, which rebuilds
   stale rows too, and restart the worker.**
-- **Hybrid search (Phase 11).** `/api/search?mode=hybrid|vector|keyword` (default hybrid) and the agent's `search_transcripts` use
+- **Hybrid search (Phase 11).** `/api/search?mode=hybrid|vector|keyword` (default hybrid) uses
   `retrieval.hybrid_search`: top `HYBRID_CANDIDATES` (30) of vector (after the MIN_SCORE cut) and keyword (`tsv @@ websearch_to_tsquery`,
   `ts_rank_cd`, no cosine cut) fused by `search_logic.rrf_merge` (k=`RRF_K`=60), dedupe by `rrf`, optional `services/rerank.py` cross-encoder
   (`RERANK`, default off, model loaded lazily once, failure -> fused order). `score` is always cosine (the UI shows it); keyword-only mode
-  uses rank/(1+rank). `/api/ask` rag and the "search" route still use `vector_search` on purpose (not asked to change). Keyword terms are
+  uses rank/(1+rank). Keyword terms are
   ANDed, so long natural-language questions often get 0 keyword hits and hybrid then equals vector. No schema change (tsv + GIN already existed).
 - **Eval harness (Phase 12, `backend/eval/`, see its README).** Gold file `eval/queries.jsonl` (hand-labelled by the developer: NEVER invent
   gold entries; for pipeline smoke tests build a throwaway file from chunk text under /tmp). Same query text on several lines = one query with
   several gold ranges. `metrics.py` is pure (tested in `tests/test_eval_metrics.py`); `run_eval.py` (vector/keyword/hybrid/hybrid+rerank,
-  Recall@1/@5, MRR, median warm latency, silently-falling-back reranker is reported as skipped, not as a result); `run_answer_eval.py` (rag vs
-  agent on `multi`, Gemini judge, citation precision; makes REAL Gemini calls and asks first; never run it without the user's go-ahead);
+  Recall@1/@5, MRR, median warm latency, silently-falling-back reranker is reported as skipped, not as a result);
   `add_query.py` (interactive labelling). Run inside the api container. On Git Bash set `MSYS_NO_PATHCONV=1` when passing /tmp paths.
 - **pgvector HNSW gotcha:** it returns at most `hnsw.ef_search` (default 40) rows regardless of LIMIT and applies WHERE filters after
   the index scan; `vector_search` does `SET LOCAL hnsw.ef_search` to cover its candidate limit.
@@ -135,33 +133,12 @@ and jump to timestamps; a Gemini tool-calling agent answers multi-step questions
 - **Verification that worked:** besides `npm test`, a headless-Edge run over the DevTools protocol (Node's built-in WebSocket, no new
   dependency) against a throwaway Postgres/Redis/SeaweedFS with the real video and real chunks caught real bugs that unit tests could not.
   Use a different port than 5173 (the developer may have `npm run dev` running) and never kill processes you did not start.
-- **Ask / RAG (`POST /api/ask`, page `/ask`).** `services/llm.py` wraps google-genai: per-attempt timeout (`LLM_TIMEOUT_SEC`, sent to the SDK
-  in ms), retries on 429/500/502/503/504 and network errors (`LLM_MAX_RETRIES`, exponential backoff with jitter), token usage logged (counts
-  only: never prompts or answers, they hold user questions and transcript text). Every `LLMError` subclass carries a short safe
-  `user_message`; the route turns them into 503 with exactly that text, never the SDK's message. The LLM is swappable (`set_llm`), so tests
-  use `tests/fakes.py::FakeLLM` and **never call Gemini**. `services/rag.py`: retrieve `RAG_TOP_K` (8) with `highlight=False`; no hits -> fixed
-  "couldn't find anything" answer WITHOUT calling the model; context blocks `[n] (title @ mm:ss) text` inside `<excerpts>`, question in
-  `<question>`; the system prompt says answer only from the excerpts, cite `[n]`, reply with the INSUFFICIENT sentence if unsure, and treat
-  excerpts as untrusted data (prompt injection). `parse_citations` keeps only `[n]` that exist, rewrites `[1, 2]` as `[1][2]`, removes
-  invented numbers and tidies the gap. Queries are logged with mode "ask"; rate limit 10/min per user. Config: `GEMINI_API_KEY`,
-  `LLM_MODEL` (default alias `gemini-flash-latest`; pin an exact id for reproducibility), `LLM_TIMEOUT_SEC`, `LLM_MAX_RETRIES`,
-  `LLM_MAX_OUTPUT_TOKENS` (includes thinking tokens), `RAG_TOP_K`. `python -m app.scripts.check_llm` sends ONE real tiny request (`--models`
-  lists usable model ids): run it on purpose after setting the key.
-- **Ask UI.** Answers render as text nodes only (never HTML); `lib/answerText.ts` turns known `[n]` into chip buttons that seek the shared
-  `VideoPlayer`. `lib/chat.ts` is the pure state machine (one pending question, cancel removes it and returns the text to the box, retry);
-  the conversation lives in `sessionStorage` (this tab only; a request that was pending when the page went away comes back as a retryable
-  error). 429 blocks sending until Retry-After; client gives up after 100 s. Enter sends, Shift+Enter is a new line.
-- **Agent / router / SSE / guardrails (Phases 9-10).** `app/agent/`: `loop.py` (hand-rolled: model -> tool calls (parallel) -> results in ONE
-  turn -> repeat; after `max_steps` one forced final call with tool mode NONE, so calls <= max_steps+1), `tools.py` (Pydantic-validated
-  args, bad args return an error string to the model, results truncated to a token budget BEFORE they count as evidence), `citations.py`
-  (model cites `[video_id@seconds]`; only refs inside ranges tools actually returned survive, renumbered to `[n]`), `router.py` (heuristics
-  first, tiny LLM call only when ambiguous, failure -> rag), `orchestrator.py`. `POST /api/ask` takes `mode` rag|agent|auto|search and
-  returns `route`, `trace`, `usage`; `GET /api/ask/stream` is SSE (events route, step_start, step_result, answer, error, done; auth via
-  bearer through fetch, never EventSource; pre-stream failures are real 401/422/429). Client disconnect stops the agent before its next
-  model call. Guardrails: transcript text is wrapped as untrusted data (`services/safety.py`), per-request LLM call cap, per-user daily
-  token budget in Redis (`services/usage.py`, fail-open), last 3 Q/A turns per chat session held SERVER-side (`services/memory.py`, keyed
-  by user + client session id). Frontend: `lib/sse.ts` parser, `lib/askStream.ts`, `lib/trace.ts`, `components/AgentTrace.tsx`.
-  Not yet done: a real Gemini call and a real-browser E2E of the live trace (unit + fake-server verified only).
+- **Ask was removed (Round 5).** The Ask feature (RAG + hand-rolled Gemini agent, router, fallback models, circuit breaker, chat memory,
+  daily token budget, the `/ask` page and `/api/ask*`) is gone on purpose: do not re-add LLM code, `GEMINI_API_KEY`, `LLM_*`/`AGENT_*`/`RAG_*`/
+  `ASK_*`/`CHAT_MEMORY_*`/`DAILY_TOKEN_BUDGET` settings or `google-genai` without being asked. KEPT on purpose: `GET /api/jobs/events` (job-progress
+  SSE) with `SSE_KEEPALIVE_SEC`, `lib/sse.ts` and `api.stream` (now used only by the job feed), the hybrid search and its eval harness (the
+  `multi` gold query type stays: a question needing several moments), and `search_logs` (its `mode` column may hold old `'ask'` rows: leave
+  them). Ask left no tables of its own; its Redis keys (`chat:*`, `tokens:*`, `llm:cb:*`, `rl:ask:*`) simply expire.
 - **No polling, no preloading (mentor review of a production network recording).** The frontend has NO `setInterval` and loads NO video bytes
   until the user opens one (both enforced by `tests/noBackgroundRequests.test.mjs`: no `setInterval`, every `<video>` has `preload="none"`, the
   player is the only `<video>`, only the player asks for stream URLs). Search/Home/Library/Watch make zero requests after their first load.
@@ -197,15 +174,6 @@ and jump to timestamps; a Gemini tool-calling agent answers multi-step questions
   not match the file an admin re-uploads). Prod compose rotates logs for all six services (json-file 10m x 3; tested on the resolved
   config). `Makefile` (`make ps | logs [s=worker] | deploy | shell-api`) wraps `docker compose --env-file .env.prod -f
   docker-compose.prod.yml`.
-- **AI outage handling (Round 4).** `services/llm.py::FallbackLLM` wraps one `GeminiLLM` per model: `LLM_MODEL` (own `LLM_MAX_RETRIES`)
-  then each `LLM_FALLBACK_MODELS` entry ONCE; it fails over only on `LLMUnavailable` (503 `LLMOverloaded`, 429 `LLMQuotaExceeded`, 504/timeout/
-  network); bad key/unknown model/empty answer are NOT outages and raise at once. `services/circuit.py::CircuitBreaker` (Redis keys
-  `llm:cb:fail|open:<model>`, fail-open): 3 consecutive 503s (counted per attempt, via `GeminiLLM(on_attempt_error=...)`) open a model for 60 s
-  for every worker; after the cooldown one more 503 re-opens it at once. A fallback turn gets history WITHOUT the primary's `raw` provider
-  objects (thought signatures). If every model fails, `orchestrator.ask` answers with `hybrid_search` results (`degraded=True`, `notice`,
-  clickable `[n]`, route "search", NOT saved to chat memory); NotConfigured/Rejected/Empty stay 503 errors. `usage.model` = the model that
-  answered (shown as "1 AI call · N tokens · model"). Own rate limit text ("You're sending questions too quickly...") differs from the
-  provider's quota text; Ask shows the server's 429 message. `GET /api/ask*` response gains `degraded`, `notice`, `usage.model`.
 - **Worker threads and search timing.** `WHISPER_THREADS` (default 1, faster-whisper `cpu_threads`) and `TORCH_THREADS` (default 1,
   `torch.set_num_threads` in `worker_process_init`) keep one of the server's 2 CPUs free for the API; raise both on a bigger machine.
   `/api/search` sends `Server-Timing` (log, embed, vector_sql, keyword_sql, hl_lookup, hl_embed, rerank, total; visible in DevTools >
@@ -215,14 +183,13 @@ and jump to timestamps; a Gemini tool-calling agent answers multi-step questions
 - **Frontend redesign (YouTube-style, LIGHT by default).** Shell: sticky `Header` (menu button, logo, search box, avatar `AccountMenu`) + `Sidebar`
   (full / icon rail via the hamburger, remembered in `svs.sidebar`; a bottom bar on phones) + page. Routes: `/` Home (thumbnail grid + sort chips;
   an old `/?q=` link redirects), `/search?q&mode&video&after` (YouTube-style result rows; the header box is the only search input, Enter submits,
-  `/` focuses it everywhere), `/watch/:id?t=` (big player + transcript panel), `/ask`, `/library`, `/admin`. Thumbnails are colour tiles:
+  `/` focuses it everywhere), `/watch/:id?t=` (big player + transcript panel), `/library`, `/admin`. Thumbnails are colour tiles:
   `VideoThumb` has NO `<video>` and makes no request (see the "No polling" bullet). Theme: light by default, dark only by choice (`lib/theme.ts`, `svs.theme`, applied by an inline script in `index.html`); the OS dark
   setting is IGNORED on purpose; dark tokens are the `[data-theme='dark']` block in `index.css`. NO background doodles/patterns (removed on request): plain `--bg`. The product is for education: the logo is a
   graduation cap (no YouTube-like logo or red play button anywhere); the brand colour is indigo `--brand`. Search state: `lib/searchParams.ts` (validated URL <-> filters), `createSearcher` takes filters
-  (`setFilters` searches at once; `filtersKey` drops stale responses). Ask: answer style auto|rag|agent (`svs.ask.mode`), Copy answer, Regenerate
-  (the server memory records the repeat as another turn). A11y/speed: skip link, page title + live region per route (`lib/titles.ts`), Ask/Watch/Admin
+  (`setFilters` searches at once; `filtersKey` drops stale responses). A11y/speed: skip link, page title + live region per route (`lib/titles.ts`), Watch/Admin
   are `React.lazy` with navbar prefetch and `RouteErrorBoundary`, skeletons, reduced motion, 44px targets on coarse pointers. Verified with headless
-  Edge against a throwaway mock backend serving a real sample video. NOT done: an in-chat video filter (no such backend parameter).
+  Edge against a throwaway mock backend serving a real sample video.
 - **Production (Phase 13, one EC2 t3.medium, see `docs/DEPLOY.md`).** `docker-compose.prod.yml` (+ `.env.prod`, `Caddyfile`, `backend/Dockerfile.prod`,
   `frontend/Dockerfile`, `scripts/deploy.sh`, `scripts/backup.sh`); run with `--env-file .env.prod`. Services: postgres, redis, api (gunicorn + uvicorn
   workers, `WEB_CONCURRENCY` 2), worker (`--concurrency=1`, no `-B`), beat, caddy (the only published ports 80/443; serves the built React app, proxies
@@ -231,9 +198,6 @@ and jump to timestamps; a Gemini tool-calling agent answers multi-step questions
   default JWT_SECRET / DB password / `COOKIE_SECURE=false` and makes `storage.ensure_bucket` fail instead of creating the bucket. The prod image bakes
   Whisper + embedder (build args `WHISPER_SIZE`, `EMBED_MODEL`). The frontend only plays S3 videos via `<video>` (no CORS rule needed; adding fetch/XHR/crossOrigin
   on S3 URLs would need one). Not verified on a real server yet.
-- **Verifying a model wrapper without the real service:** run the REAL SDK inside the api container against a tiny local fake Gemini HTTP
-  server (`http_options={"base_url": ...}`): it exercised request body, header, usage parsing, real 429/503/400/404 error classes and the
-  timeout path with zero Google traffic.
 - **Dev machine:** Windows + PowerShell, Python 3.13 in `backend\.venv`, Docker Desktop (WSL 2), ffmpeg on PATH. The project
   path contains spaces: quote every path in commands and scripts. Internet is slow/unreliable: avoid forcing large
   re-downloads and ask before adding a heavy dependency.

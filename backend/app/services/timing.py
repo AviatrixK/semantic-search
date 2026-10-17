@@ -1,6 +1,6 @@
 """Per-request timing for search, reported as response headers (see api/routes/search.py).
 
-Passing a `Timings` through the retrieval functions costs nothing when it is None, so the agent's tool calls and the
+Passing a `Timings` through the retrieval functions costs nothing when it is None, so other callers and the
 eval harness are unchanged."""
 import time
 from contextlib import contextmanager, nullcontext

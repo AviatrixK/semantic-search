@@ -1,12 +1,11 @@
 # Evaluation harness
 
-Numbers instead of opinions: a hand-labelled set of questions, and scripts that measure how well search and answers do on it.
+Numbers instead of opinions: a hand-labelled set of questions, and scripts that measure how well search does on it.
 Run everything inside the api container (it has the database, Redis and the models):
 
 ```powershell
 docker compose exec api python eval/add_query.py              # 1. label queries while you watch a video
 docker compose exec api python eval/run_eval.py               # 2. retrieval: vector vs keyword vs hybrid vs hybrid+rerank
-docker compose exec api python eval/run_answer_eval.py        # 3. answers: RAG vs agent, judged by Gemini (real API calls)
 ```
 `backend/` is mounted into the container, so `eval/queries.jsonl` and `eval/results/*.json` appear on your disk.
 
@@ -18,7 +17,7 @@ One JSON object per line:
 |---|---|---|
 | `exact` | a question using words actually spoken (names, acronyms, a distinctive phrase) | keyword/hybrid strength |
 | `paraphrase` | the same idea in words the speaker did **not** use | semantic/vector strength |
-| `multi` | a question needing more than one moment ("compare what is said about X early and late") | RAG vs agent |
+| `multi` | a question needing more than one moment ("compare what is said about X early and late") | several gold moments per question |
 
 `add_query.py` shows the transcript of the moment you type (`2:03-2:40`, `123-160`, `1m30s-2m`) so you can check the label, warns if the
 range is past the end of the video, and lets you undo (`u`) the last entry. **Writing the same question again adds another correct
@@ -41,25 +40,6 @@ rescores the top 20). Tables are printed overall and per query type. `hybrid+rer
 (~90 MB) on first use; use `--skip-rerank` to avoid that, or it is skipped (and reported) if the model cannot load.
 Expectation: hybrid >= vector on `exact`; the script warns when it is not.
 
-## Answer metrics (`run_answer_eval.py`, `multi` queries by default)
-Each question is answered by single-shot **RAG** and by the **agent**; then Gemini grades each answer. This makes real API calls
-(it asks first; `--yes` skips the question, `--limit 5` is a cheap trial).
-
-- **Groundedness (1-5)**: are the answer's claims supported by the transcript text of the chunks it cites? 5 = all supported, 1 = none
-  (or no citations). The judge sees only the question, the answer and the cited excerpts.
-- **Relevance (1-5)**: does the answer actually address the question? 5 = fully, 1 = not at all.
-- **Citation precision**: share of the answer's citations whose range overlaps a gold range. Answers with no citations are left out
-  (shown as `n=` next to the number) instead of counting as 0%.
-- **Declined answers** ("I couldn't find / don't have enough information", or the agent's "could not finish"): not sent to the judge;
-  groundedness is left out, relevance counts as 1. They are listed under the table.
-- **Avg steps / LLM calls / tokens, median latency**: what an answer costs. Steps = rounds in which the agent used tools (RAG has none).
-
-### Read the judge with suspicion
-An LLM judge is cheap and scales, but it is biased: it tends to be generous, can favour longer answers, and by default the **same
-model** writes and grades the answers (`--judge-model` lets you use another). Open `eval/results/answers-<timestamp>.json`, read the
-`judge` reason next to a few answers (try 5, including a low and a high score) and check you agree before trusting the averages.
-Also note: RAG retrieves with vector search while the agent uses hybrid, so the comparison covers retrieval *and* orchestration.
-
 ## Results
-Each run saves `eval/results/retrieval-<timestamp>.json` or `answers-<timestamp>.json` with the settings used (models, `MIN_SCORE`,
+Each run saves `eval/results/retrieval-<timestamp>.json` with the settings used (models, `MIN_SCORE`,
 RRF k...) and every per-query outcome, so a miss can be inspected and runs can be compared over time.

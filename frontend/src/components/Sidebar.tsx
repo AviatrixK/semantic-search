@@ -6,7 +6,6 @@ import styles from './Sidebar.module.css'
 
 const ITEMS = [
   { to: '/', label: 'Home', icon: 'home', end: true },
-  { to: '/ask', label: 'Ask', icon: 'ask' },
   { to: '/library', label: 'Library', icon: 'library' },
 ] as const
 

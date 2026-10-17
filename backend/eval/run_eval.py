@@ -5,7 +5,7 @@
     docker compose exec api python eval/run_eval.py --queries eval/other.jsonl --k 10 --repeats 5
 
 Prints markdown tables (copy them into notes or a PR) and saves eval/results/retrieval-<timestamp>.json with every query's rank.
-Needs the database (and Redis for the embedding cache); it never calls Gemini."""
+Needs the database (and Redis for the embedding cache)."""
 import argparse
 import json
 import sys
@@ -25,8 +25,8 @@ class ModeUnavailable(Exception):
 
 
 def build_modes(skip_rerank: bool = False) -> dict:
-    """mode name -> fn(db, query, k) -> hits. highlight=False everywhere: it is what RAG and the agent use, and it keeps
-    sentence embedding out of the latency numbers."""
+    """mode name -> fn(db, query, k) -> hits. highlight=False everywhere: it keeps sentence embedding out of
+    the latency numbers."""
     from app.services import retrieval
 
     def rerank_checked(db, q, k):

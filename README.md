@@ -1,7 +1,7 @@
 # Semantic Video Search
 
 Upload videos → Whisper transcribes → chunks are embedded into pgvector → users search by meaning
-and jump to the exact timestamp. An LLM agent (weeks 7–9) plans multi-step searches and answers with citations.
+and jump to the exact timestamp.
 
 ## Services (docker compose)
 | Service | Port | Purpose |
@@ -66,8 +66,7 @@ upload date (all kept in the address, e.g. `/search?q=pauses&mode=keyword`). The
 transcript beside it: click a line to jump there, the spoken line is highlighted and followed (scroll by hand to pause that, "Follow playback"
 resumes it). `t` accepts seconds, `2:03` or `1m30s`, and "Copy link to this moment" builds such a link. The browser plays the video straight from storage
 through a presigned URL, so `S3_PUBLIC_ENDPOINT` must be reachable from the browser (it is `http://localhost:9000` by default). The round avatar (top right)
-opens a menu with the dark-mode switch and Log out; the hamburger collapses the left menu. **Ask** has an answer style (Automatic, Quick, Research), and
-each answer can be copied or regenerated. **Library** (`/library`) lists the ready videos.
+opens a menu with the dark-mode switch and Log out; the hamburger collapses the left menu. **Library** (`/library`) lists the ready videos.
 
 **Admin page** (`/admin`, admins only): drag-and-drop or pick several videos, edit titles, upload them one after another with a progress
 bar, and watch each one's processing live (stage and progress, polled every 2 seconds, error text on failure). The library table shows
@@ -84,7 +83,7 @@ the same video are collapsed to the best one, and each hit carries `highlight`, 
 with Reciprocal Rank Fusion (`score = sum 1/(60 + rank)`, `RRF_K`), so exact names/acronyms and paraphrases both work. `score` stays the cosine
 similarity; hybrid hits also carry `rrf` and `found_by`. Keyword mode uses `websearch_to_tsquery` (plain words are ANDed, `"phrases"`, `OR`, `-exclude`
 work) and needs no model. Optional cross-encoder rerank of the top 20: `RERANK=true` in `.env` (downloads `cross-encoder/ms-marco-MiniLM-L-6-v2`
-on first use, adds latency; falls back to the fused order if it cannot load). The agent's `search_transcripts` tool uses hybrid.
+on first use, adds latency; falls back to the fused order if it cannot load).
 The `X-Search-Ms` response header reports server time. Query embeddings are cached in Redis for a day, so a repeated query skips the model.
 
 Sentence vectors for highlights are computed at ingest. For videos ingested before Phase 4, one-time (existing database):
@@ -97,25 +96,8 @@ Until the backfill runs, highlights still work but are computed per request (abo
 Re-run the backfill whenever the sentence splitter changes: it rebuilds stale rows as well as filling in missing ones.
 
 ## Evaluation
-`backend/eval/` measures search and answer quality against a hand-labelled gold set (Recall@1/@5, MRR, latency; LLM-judged groundedness and
-relevance, citation precision). See `backend/eval/README.md`: `docker compose exec api python eval/add_query.py`, then `eval/run_eval.py` and
-`eval/run_answer_eval.py` (the latter makes real Gemini calls).
-
-## Ask (answers with citations)
-`POST /api/ask {"question": "..."}` retrieves the 8 best transcript chunks, asks Gemini to answer **only** from them and to cite `[n]`, and
-returns `{answer, citations: [{n, video_id, title, start_sec, end_sec}], mode: "rag"}`. Citations that do not exist are dropped; when
-nothing relevant is found the model is not called at all. Login required, 10 questions per minute per user.
-
-It needs a Gemini API key (not set by default). One-time setup, PowerShell:
-```powershell
-# 1. add to .env:   GEMINI_API_KEY=your-key        (optional: LLM_MODEL=<model id>, default is the alias gemini-flash-latest)
-docker compose up -d api            # recreates the api container so it sees the new environment (no rebuild needed)
-docker compose exec api python -m app.scripts.check_llm            # ONE real tiny request: confirms key, model and network
-docker compose exec api python -m app.scripts.check_llm --models   # if it says the model was rejected: lists the ids your key can use
-```
-If a model id is rejected, set `LLM_MODEL` in `.env` to one of the listed ids and run `docker compose up -d api` again. In the app, the
-**Ask** tab is a chat: click a numbered chip (or a source under the answer) to play that moment in the player beside it. Without a key,
-Ask shows "Ask is not set up yet: an administrator needs to configure GEMINI_API_KEY." instead of failing mysteriously.
+`backend/eval/` measures search quality against a hand-labelled gold set (Recall@1/@5, MRR, latency). See `backend/eval/README.md`:
+`docker compose exec api python eval/add_query.py`, then `docker compose exec api python eval/run_eval.py`.
 
 ## Smoke test the pipeline (PowerShell, stack running)
 ```powershell
@@ -175,7 +157,6 @@ cd backend && pip install -r requirements.txt && pytest
 ## Roadmap
 - [x] Wk 1–4: transcription, chunking, pgvector, auth, search API (this scaffold)
 - [ ] Wk 5: React frontend (login, admin upload + job polling, search with seeking player)
-- [ ] Wk 7–9: `/api/ask` — RAG + hand-rolled Gemini tool-calling agent (`app/agent/`)
 - [ ] Wk 10: hybrid search (tsvector + RRF), reranker
 - [ ] Wk 11: eval set, Recall@5 / MRR (`backend/eval/`)
 - [ ] Wk 12: deploy, demo

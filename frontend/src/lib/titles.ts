@@ -5,7 +5,6 @@ export function pageName(pathname: string): string {
   const path = pathname.replace(/\/+$/, '') || '/'
   if (path === '/') return 'Home'
   if (path === '/search') return 'Search results'
-  if (path === '/ask') return 'Ask'
   if (path === '/library') return 'Library'
   if (path === '/admin') return 'Admin'
   if (path === '/login') return 'Log in'

@@ -60,17 +60,13 @@ export function rateLimitMessage(retryAfter?: number): string {
     : `Too many attempts. Please wait ${formatWait(retryAfter)} and try again.`
 }
 
-export type ErrorContext = 'login' | 'register' | 'upload' | 'reprocess' | 'delete' | 'job' | 'stream' | 'transcript' | 'search' | 'ask'
+export type ErrorContext = 'login' | 'register' | 'upload' | 'reprocess' | 'delete' | 'job' | 'stream' | 'transcript' | 'search'
 
 /** User-facing text for any error thrown by the API client. Never shows stack traces or raw JSON. */
 export function describeError(err: unknown, context?: ErrorContext): string {
   if (err instanceof NetworkError) return "Can't reach the server. Check that the backend is running and try again."
   if (err instanceof ApiError) {
-    if (err.status === 429) {
-      // Ask: the server's own words say WHICH limit it is (our per-minute limit, or today's AI usage budget); elsewhere stay generic.
-      if (context === 'ask' && err.message) return err.message
-      return rateLimitMessage(err.retryAfter)
-    }
+    if (err.status === 429) return rateLimitMessage(err.retryAfter)
     if (context === 'upload') {
       if (err.status === 413) {
         const mb = /max (\d+) MB/i.exec(err.message)?.[1] // backend: "File too large (max 500 MB)"
@@ -86,8 +82,6 @@ export function describeError(err: unknown, context?: ErrorContext): string {
     if (context === 'reprocess' && err.status === 409) return 'This video is already being processed.'
     if (context === 'job' && err.status === 404) return 'This job no longer exists. The video may have been deleted.'
     if ((context === 'stream' || context === 'transcript') && err.status === 404) return 'This video is no longer available.'
-    // The backend's 503 for /api/ask carries a short, safe, user-facing reason (not configured, busy, model rejected...).
-    if (context === 'ask' && err.status === 503 && err.message) return err.message
     if (err.status === 401) {
       return context === 'login' ? 'Incorrect email or password.' : 'Your session has expired. Please log in again.'
     }

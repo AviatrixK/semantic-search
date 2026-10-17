@@ -1,4 +1,3 @@
-import uuid
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -6,7 +5,6 @@ import pytest
 import redis
 from fastapi import HTTPException
 
-from app.api.deps import CurrentUser
 from app.core import ratelimit
 from app.services import retrieval
 
@@ -84,18 +82,6 @@ def test_enforce_raises_429_with_retry_after_header():
         with pytest.raises(HTTPException) as ei:
             ratelimit.enforce("x", "u", 5)
     assert ei.value.status_code == 429 and ei.value.headers["Retry-After"] == "17"
-
-
-def test_ask_limit_is_10_per_minute_per_user():
-    r = FakeRedis()
-    alice, bob = CurrentUser(id=str(uuid.uuid4()), role="user"), CurrentUser(id=str(uuid.uuid4()), role="user")
-    with patch.object(ratelimit, "_redis", return_value=r):
-        for _ in range(10):
-            ratelimit.ask_rate_limit(alice)
-        with pytest.raises(HTTPException) as ei:
-            ratelimit.ask_rate_limit(alice)
-        ratelimit.ask_rate_limit(bob)  # other users are unaffected
-    assert ei.value.status_code == 429 and 1 <= int(ei.value.headers["Retry-After"]) <= 60
 
 
 # ---- through the real app (integration; Redis db 15 is flushed around every test)

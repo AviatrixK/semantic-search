@@ -11,14 +11,14 @@ function parse(chunks, { end = true } = {}) {
 }
 
 const STREAM =
-  'event: route\ndata: {"route":"agent"}\n\n' +
+  'event: snapshot\ndata: {"jobs":[]}\n\n' +
   ': keep-alive\n\n' +
-  'event: step_start\ndata: {"step":1}\n\n' +
-  'event: answer\ndata: {"answer":"Hi [1]"}\n\n' +
+  'event: job\ndata: {"stage":"embedding"}\n\n' +
+  'event: job\ndata: {"stage":"done"}\n\n' +
   'event: done\ndata: {}\n\n'
 const EXPECTED = [
-  { event: 'route', data: '{"route":"agent"}' }, { event: 'step_start', data: '{"step":1}' },
-  { event: 'answer', data: '{"answer":"Hi [1]"}' }, { event: 'done', data: '{}' },
+  { event: 'snapshot', data: '{"jobs":[]}' }, { event: 'job', data: '{"stage":"embedding"}' },
+  { event: 'job', data: '{"stage":"done"}' }, { event: 'done', data: '{}' },
 ]
 
 test('a plain stream gives its events in order and ignores comment keep-alives', () => {
@@ -82,12 +82,12 @@ test('an event that never got its blank line is dropped at the end of the stream
 test('events are delivered as soon as their blank line arrives, not at the end', () => {
   const events = []
   const p = createSseParser((e) => events.push(e))
-  p.push('event: step_start\ndata: 1\n\n')
+  p.push('event: job\ndata: 1\n\n')
   assert.equal(events.length, 1)
-  p.push('event: step_result\ndata: 2\n')
+  p.push('event: update\ndata: 2\n')
   assert.equal(events.length, 1) // not complete yet
   p.push('\n')
-  assert.deepEqual(events.map((e) => e.event), ['step_start', 'step_result'])
+  assert.deepEqual(events.map((e) => e.event), ['job', 'update'])
 })
 
 test('a trailing "\\r" at the end of the stream still completes its line', () => {

@@ -70,6 +70,6 @@ CREATE TABLE search_logs (
   id          UUID PRIMARY KEY,
   user_id     UUID REFERENCES users(id) ON DELETE SET NULL,
   query       TEXT NOT NULL,
-  mode        TEXT NOT NULL,   -- search|ask
+  mode        TEXT NOT NULL,   -- search (old rows may say 'ask': written by the removed Ask feature, kept as history)
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
