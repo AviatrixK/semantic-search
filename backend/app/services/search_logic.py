@@ -164,3 +164,24 @@ def best_index(query_vec, sentence_vecs) -> int:
     """Index of the sentence closest to the query. Vectors are L2-normalised (the embedder guarantees it), so the
     dot product is the cosine similarity. Ties go to the earliest sentence."""
     return int(np.argmax(np.asarray(sentence_vecs, dtype=np.float32) @ np.asarray(query_vec, dtype=np.float32)))
+
+
+# ---------------------------------------------------------------- model-free highlights
+_STOP = frozenset("a an and are as at be by do does for from how i in is it of on or that the this to was what when where which who why "
+                  "with you".split())
+
+
+def _tokens(text: str) -> set[str]:
+    return {t for t in re.findall(r"\w+", text.lower()) if len(t) > 1 and t not in _STOP}
+
+
+def best_lexical_index(query: str, sentences: list[str]) -> int | None:
+    """The sentence sharing the most distinct words with the query (ties: the earliest), or None when none shares a word. No
+    model and no network, so it works for every embedding provider and when the provider is down. It sees only the sentence's own
+    words, so a query in another language or script than the text finds nothing and the caller shows the chunk without highlight."""
+    q = _tokens(query)
+    if not q:
+        return None
+    scores = [len(q & _tokens(s)) for s in sentences]
+    best = max(scores, default=0)
+    return scores.index(best) if best > 0 else None

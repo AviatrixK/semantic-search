@@ -8,6 +8,7 @@ from collections import defaultdict
 
 from sqlalchemy import delete, select
 
+from app.core.config import settings
 from app.core.db import SessionLocal
 from app.models import Chunk, ChunkSentence
 from app.services import sentences
@@ -17,6 +18,10 @@ BATCH = 100  # chunks per model call / commit
 
 
 def main() -> int:
+    from app.services import embedders
+    if not embedders.get_embedder().uses_legacy_column:
+        print(f"EMBED_PROVIDER={settings.EMBED_PROVIDER}: highlights are lexical and need no sentence vectors, nothing to backfill.")
+        return 0
     db = SessionLocal()
     try:
         stored = defaultdict(list)

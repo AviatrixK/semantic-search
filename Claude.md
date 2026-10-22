@@ -72,7 +72,7 @@ and jump to timestamps. (There is no question-answering / LLM feature: Ask was r
 - **Search (`/api/search`):** `retrieval.vector_search` over-fetches 3x, drops hits below `MIN_SCORE` (0.25), dedupes overlapping
   hits of the same video (greedy, best score wins; touching ranges are not overlaps), then keeps k. The threshold and dedupe are
   pure functions in `services/search_logic.py` (unit-tested without DB or model). Filters: `video_id`, `uploaded_after` (date, UTC,
-  inclusive). Query embeddings are cached in Redis (`emb:` + sha256(model + query), TTL 1 day, fail-open). Response header
+  inclusive). Query embeddings are cached in Redis (`emb:` + sha256(provider + model + dimensions + query), TTL 7 days, fail-open). Response header
   `X-Search-Ms` (exposed through CORS). `highlight` = best sentence of the chunk by cosine.
 - **Highlights use stored sentence vectors.** Embedding ~80 sentences at query time measured ~525 ms on this CPU (budget 50 ms), so
   the worker embeds each multi-sentence chunk's sentences once at ingest into `chunk_sentences` (`services/sentences.py`); search
@@ -134,8 +134,9 @@ and jump to timestamps. (There is no question-answering / LLM feature: Ask was r
   dependency) against a throwaway Postgres/Redis/SeaweedFS with the real video and real chunks caught real bugs that unit tests could not.
   Use a different port than 5173 (the developer may have `npm run dev` running) and never kill processes you did not start.
 - **Ask was removed (Round 5).** The Ask feature (RAG + hand-rolled Gemini agent, router, fallback models, circuit breaker, chat memory,
-  daily token budget, the `/ask` page and `/api/ask*`) is gone on purpose: do not re-add LLM code, `GEMINI_API_KEY`, `LLM_*`/`AGENT_*`/`RAG_*`/
-  `ASK_*`/`CHAT_MEMORY_*`/`DAILY_TOKEN_BUDGET` settings or `google-genai` without being asked. KEPT on purpose: `GET /api/jobs/events` (job-progress
+  daily token budget, the `/ask` page and `/api/ask*`) is gone on purpose: do not re-add LLM/answer-generation code, `LLM_*`/`AGENT_*`/`RAG_*`/
+  `ASK_*`/`CHAT_MEMORY_*`/`DAILY_TOKEN_BUDGET` settings or `google-genai` without being asked. (`GEMINI_API_KEY` exists again, but ONLY for Gemini
+  EMBEDDINGS, see the "Hosted models" bullet; it is not an LLM feature.) KEPT on purpose: `GET /api/jobs/events` (job-progress
   SSE) with `SSE_KEEPALIVE_SEC`, `lib/sse.ts` and `api.stream` (now used only by the job feed), the hybrid search and its eval harness (the
   `multi` gold query type stays: a question needing several moments), and `search_logs` (its `mode` column may hold old `'ask'` rows: leave
   them). Ask left no tables of its own; its Redis keys (`chat:*`, `tokens:*`, `llm:cb:*`, `rl:ask:*`) simply expire.
@@ -174,6 +175,46 @@ and jump to timestamps. (There is no question-answering / LLM feature: Ask was r
   not match the file an admin re-uploads). Prod compose rotates logs for all six services (json-file 10m x 3; tested on the resolved
   config). `Makefile` (`make ps | logs [s=worker] | deploy | shell-api`) wraps `docker compose --env-file .env.prod -f
   docker-compose.prod.yml`.
+- **Hosted models (Round 6).** Defaults STAY local (`TRANSCRIBER=whisper`, `EMBED_PROVIDER=local`); the local ML packages stay in the images
+  until hosted defaults are chosen from `eval/run_provider_eval.py`. **Transcription:** `services/sarvam.py` (Sarvam batch API, httpx, no SDK;
+  REST flow copied from the official SDK source) returns sentence-level timestamps. **ONE speech-to-text job per video** (mode `transcribe`,
+  native script, INR 30/h); `text_roman` / `text_en` of each CHUNK are made from its native text by Sarvam's text APIs (`POST /transliterate`
+  and `POST /translate`, target en-IN, INR 20 per 10K characters each, `sarvam.add_text_variants`; `SARVAM_TEXT_VARIANTS` = `roman,en` picks
+  which; `SARVAM_TRANSLATE_MODEL` sarvam-translate:v1 = 23 languages / 2000 chars per request, mayura:v1 = 11 / 1000; /transliterate has 11
+  languages and no documented size limit, so `SARVAM_TRANSLIT_MAX_CHARS`=1000; texts over a limit are split at sentence ends; en-IN speech
+  needs no calls; a 422 on one text leaves that value empty). The old three-audio-jobs-aligned-by-time design (`align_text`) is GONE. Cost:
+  about INR 342 per hour of video (30 + 2 x 78,000 chars/h x 20/10K; the 78,000 is measured on the dev library and includes the 5 s chunk
+  overlap), the text APIs are 90% of it. **Idempotent:** `videos.sarvam_job_id` / `sarvam_job_status` are committed the moment the job exists
+  and after each step (created, uploaded, started, then Sarvam's states, finally `consumed` when the chunks are stored or the failure is
+  permanent); a Celery retry hands them back to `transcribe_audio`, which resumes the same job (re-upload only if `created`, start only if
+  Sarvam still says `accepted`, else just poll/download) and starts a new one only if the saved job `failed`, is unknown (404), or is
+  `consumed`. Text-API calls are NOT resumable: a retry after the transcript step pays for them again. **Models:** `SARVAM_MODEL=saaras:v4`
+  works; languages in `SARVAM_V4_UNSUPPORTED` (empty: the docs list the same 23 languages for v4 and v3) and any job request v4 answers
+  with 400/422 are retried on `SARVAM_FALLBACK_MODEL` (v3). Audio over `SARVAM_MAX_FILE_SEC` (batch limit 2 h) is split and offset within
+  the same job. Chunks store
+  `text` (= `text_native`), `text_roman`, `text_en`; `videos.language_hint` (upload dropdown, `services/languages.py` <-> `frontend/src/lib/
+  languages.ts`, test keeps them equal) and `videos.transcriber`. **Embeddings:** `services/embedders.py` (one interface; separate
+  `embed_documents` / `query_vector` because task types differ: gemini-embedding-2 puts the task in the TEXT, -001 uses task_type, cohere
+  input_type, openai symmetric); hosted vectors go to `chunk_embeddings` (dimensionless `vector` column + one partial HNSW expression index
+  per `provider/model@dims`, `services/vectorstore.py`; search takes the better of native/en per chunk); `chunks.embedding vector(384)` is the
+  LOCAL model's and is nullable. `EMBED_DIMENSIONS` default 1536 (HNSW max 2000, verified). **Resilience:** query embedding 2 s timeout + 1
+  retry, failure -> keyword-only search (WARNING log, `X-Search-Fallback: keyword-only`), cache key = provider+model+dims+query, 7 days.
+  Hosted providers get LEXICAL highlights (`best_lexical_index`), no sentence vectors. **Keyword search = TWO indexes** in one query (`retrieval._keyword_candidates`
+  ORs them, rank = the two `ts_rank_cd` added, so a chunk found by both ranks higher; still ONE keyword list in the RRF merge): `chunks.tsv`
+  = `'simple'` over native + romanised text, `chunks.tsv_en` = `'english'` (stemming) over `coalesce(text_en, text)` (Whisper English videos
+  have no text_en: their text feeds it). Measured on the real library (old English / 3-variant simple / new two indexes): "voices"
+  22 / 2 / 22, "speaking" 16 / 4 / 16, "robot" 29 / 15 / 29. **Per-provider `MIN_SCORE_LOCAL|GEMINI|COHERE|OPENAI`** (empty = `MIN_SCORE`,
+  `settings.min_score_for(provider)`); hosted values are NOT measured yet. **Token counts:** `HostedEmbedder._count_tokens` adds the
+  provider's reported count (Gemini `usageMetadata.promptTokenCount`, Cohere `billed_units`, OpenAI `usage`) and only estimates (4
+  chars/token) when the reply has none; `tokens_estimated` says how much was guessed. The UI shows "Showing keyword matches only, as smart
+  search is temporarily unavailable." above results when `X-Search-Fallback` is set (`lib/searchFallback.ts`). Startup
+  fails if a hosted provider's key is missing; no warm-up for hosted. The API+worker import and start with torch/sentence-transformers/
+  faster-whisper blocked (tested) so the images can drop them later. Scripts: `python -m app.scripts.reprocess [--video-ids] [--transcriber]
+  [--embed-provider] [--dry-run] [--yes]` (resumable from DB state, asks before paid work), `eval/run_provider_eval.py`. Prices and sources:
+  `app/services/pricing.py` (Sarvam STT INR 30/h once + INR 20/10K chars per text version; embeddings per 1M tokens). Migrations
+  `db/migrations/2026-10-18-hosted-models.sql` and `2026-10-20-sarvam-single-job.sql`.
+  Not verified against the real services: no Sarvam/Gemini/Cohere/OpenAI call has been made (mocked HTTP only); in particular the
+  text APIs' real size limits, whether Sarvam accepts a repeated `upload-files` for a `created` job, and whether Gemini returns usage.
 - **Worker threads and search timing.** `WHISPER_THREADS` (default 1, faster-whisper `cpu_threads`) and `TORCH_THREADS` (default 1,
   `torch.set_num_threads` in `worker_process_init`) keep one of the server's 2 CPUs free for the API; raise both on a bigger machine.
   `/api/search` sends `Server-Timing` (log, embed, vector_sql, keyword_sql, hl_lookup, hl_embed, rerank, total; visible in DevTools >

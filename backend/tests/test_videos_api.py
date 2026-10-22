@@ -256,3 +256,29 @@ def test_unique_index_allows_many_videos_without_a_hash(api, db_session):
         db_session.execute(text("INSERT INTO videos (id, title, storage_key) VALUES (:i, 't', 'raw/x.mp4')"), {"i": uuid.uuid4()})
     db_session.commit()  # three NULL hashes: legacy rows must coexist
     assert db_session.execute(text("SELECT count(*) FROM videos WHERE sha256 IS NULL")).scalar() == 3
+
+
+# ---------------------------------------------------------------- language chosen on upload
+def test_the_chosen_language_is_stored_as_the_videos_hint(client, db):
+    assert post(client, language="ta-IN").status_code == 202
+    assert db.add.call_args_list[0][0][0].language_hint == "ta-IN"
+
+
+@pytest.mark.parametrize("value,stored", [("", None), ("auto", None), ("hi-in", "hi-IN"), (" en-IN ", "en-IN")])
+def test_no_choice_or_a_sloppy_spelling_is_normalised(client, db, value, stored):
+    assert post(client, language=value).status_code == 202
+    assert db.add.call_args_list[0][0][0].language_hint == stored
+
+
+def test_leaving_the_language_out_means_automatic(client, db):
+    assert post(client).status_code == 202
+    assert db.add.call_args_list[0][0][0].language_hint is None
+
+
+@pytest.mark.parametrize("bad", ["klingon", "hi", "en-US", "x" * 21])
+def test_an_unknown_language_is_refused_before_anything_is_stored(client, db, bad):
+    r = post(client, language=bad)
+    assert r.status_code == 422
+    client.upload.assert_not_called()
+    db.add.assert_not_called()
+    client.delay.assert_not_called()

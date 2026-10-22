@@ -32,7 +32,7 @@ export function useUploadQueue(onUploaded?: () => void) {
     controllers.current.set(id, controller)
     let last = 0
     api
-      .upload<UploadOut>('/api/videos', buildUploadForm(item.file, item.title), {
+      .upload<UploadOut>('/api/videos', buildUploadForm(item.file, item.title, item.language), {
         signal: controller.signal,
         onProgress: (loaded, total) => {
           const now = Date.now()
@@ -63,7 +63,7 @@ export function useUploadQueue(onUploaded?: () => void) {
 
   return {
     items: state.items,
-    add: useCallback((entries: { file: File; title: string }[]) => {
+    add: useCallback((entries: { file: File; title: string; language?: string }[]) => {
       dispatch({ type: 'enqueue', entries: entries.map((e) => ({ ...e, id: newId() })) })
     }, []),
     /** Removes a card; if it is uploading right now, the upload is aborted. */

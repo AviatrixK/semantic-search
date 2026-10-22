@@ -37,6 +37,8 @@ def search(response: Response, q: str = Query(min_length=2, max_length=500), k: 
     response.headers["X-Search-Ms"] = f"{total_ms:.1f}"
     response.headers["Server-Timing"] = timings.server_timing(total_ms)  # DevTools > Network > Timing shows each part
     response.headers["X-Search-Highlight"] = timings.highlight_summary()  # stored = from chunk_sentences, fallback = embedded now
+    if timings.counts.get("embed_failed"):  # the embedding provider was down or too slow: this answer is keyword-only
+        response.headers["X-Search-Fallback"] = "keyword-only"
     log.debug("search mode=%s k=%d hits=%d %s highlight[%s]", mode, k, len(hits), timings.server_timing(total_ms),
               timings.highlight_summary())
     return hits

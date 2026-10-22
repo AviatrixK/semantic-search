@@ -38,6 +38,8 @@ export interface RequestOptions {
   body?: BodyInit
   headers?: Record<string, string>
   signal?: AbortSignal
+  /** Called with the response headers of a successful request (e.g. the search's X-Search-Fallback). */
+  onResponseHeaders?: (headers: Headers) => void
 }
 
 export interface UploadOptions {
@@ -243,7 +245,9 @@ export function createApiClient(options: ClientOptions = {}): ApiClient {
     },
     refresh,
     async request<T>(path: string, o: RequestOptions = {}) {
-      return parse<T>(await withAuthRetry(path, (t) => send(path, o, t)))
+      const res = await withAuthRetry(path, (t) => send(path, o, t))
+      o.onResponseHeaders?.(res.headers)
+      return parse<T>(res)
     },
     async upload<T>(path: string, form: FormData, o: UploadOptions = {}) {
       return parse<T>(await withAuthRetry(path, (t) => sendXhr(path, form, t, o)))

@@ -121,3 +121,43 @@ def remux_faststart(src: str, dst: str) -> str:
     if moov_before_mdat(dst) is not True:
         raise MediaError("ffmpeg produced a file whose index is not at the start")
     return dst
+
+
+# ---- audio for hosted transcription: compressed (a 2 h WAV would be ~230 MB; this is ~43 MB) and split under the provider's limit
+def duration_float(path: str) -> float:
+    """Exact duration in seconds (duration_sec truncates to whole seconds)."""
+    _require("ffprobe")
+    out = _run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "json", path]).stdout
+    try:
+        return float(json.loads(out)["format"]["duration"])
+    except (KeyError, ValueError, TypeError) as e:
+        raise MediaError(f"ffprobe returned no duration: {out[:200]}", raw=out) from e
+
+
+def extract_audio_mp3(video_path: str, mp3_path: str, bitrate: str = "48k") -> str:
+    """Mono 16 kHz MP3 of the speech track (a speech-only stream: 48 kbit/s costs nothing in recognition accuracy)."""
+    _require("ffmpeg")
+    if not has_audio(video_path):
+        raise NoAudioStreamError(f"{video_path} has no audio stream, nothing to transcribe")
+    _run(["ffmpeg", "-y", "-loglevel", "error", "-i", video_path, "-vn", "-ac", "1", "-ar", "16000", "-c:a", "libmp3lame",
+          "-b:a", bitrate, mp3_path])
+    return mp3_path
+
+
+def split_audio(path: str, out_dir: str, part_sec: float) -> list[tuple[str, float]]:
+    """[(file, start offset in seconds)]. Audio at most `part_sec` long is returned as it is (offset 0). Longer audio is cut into
+    parts of about `part_sec` (stream copy, so no re-encode); each part's offset is the summed measured duration of the parts
+    before it, so timestamps from the parts can be put back on one timeline. Cuts can fall inside a word."""
+    total = duration_float(path)
+    if total <= part_sec:
+        return [(path, 0.0)]
+    _require("ffmpeg")
+    pattern = os.path.join(out_dir, "part%03d.mp3")
+    _run(["ffmpeg", "-y", "-loglevel", "error", "-i", path, "-f", "segment", "-segment_time", str(int(part_sec)), "-c", "copy",
+          "-reset_timestamps", "1", pattern])
+    parts = sorted(os.path.join(out_dir, f) for f in os.listdir(out_dir) if f.startswith("part") and f.endswith(".mp3"))
+    out, offset = [], 0.0
+    for p in parts:
+        out.append((p, offset))
+        offset += duration_float(p)
+    return out

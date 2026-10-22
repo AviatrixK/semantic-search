@@ -9,13 +9,18 @@ export interface SearchState {
   /** The filters (mode, video, date) they belong to: see filtersKey(). */
   filtersKey: string
   hits: SearchHit[]
+  /** The hits come from the keyword search alone because smart (embedding) search was unavailable: the page says so. */
+  keywordOnly: boolean
   error: string | null
   /** Seconds to wait before retrying, when the server rate-limited us. */
   retryAfter: number | null
 }
 
+/** What a search run returns: the hits, and whether the server answered with keyword matches only. A bare array means not. */
+export type SearchRun = SearchHit[] | { hits: SearchHit[]; keywordOnly?: boolean }
+
 export interface SearcherOptions {
-  run: (query: string, signal: AbortSignal, filters: SearchFilters) => Promise<SearchHit[]>
+  run: (query: string, signal: AbortSignal, filters: SearchFilters) => Promise<SearchRun>
   /** Mode and filters to start with (default: hybrid, no filters). */
   filters?: SearchFilters
   onState: (state: SearchState) => void
@@ -43,7 +48,7 @@ const defaultSchedule = (fn: () => void, ms: number) => {
   return () => clearTimeout(id)
 }
 
-export const IDLE: SearchState = { status: 'idle', query: '', filtersKey: '', hits: [], error: null, retryAfter: null }
+export const IDLE: SearchState = { status: 'idle', query: '', filtersKey: '', hits: [], keywordOnly: false, error: null, retryAfter: null }
 
 /**
  * Debounced search with cancellation: typing never queues requests (a new one aborts the previous), an unchanged query
@@ -88,13 +93,14 @@ export function createSearcher(o: SearcherOptions): Searcher {
     const used = filters
     const usedKey = fkey
     try {
-      const hits = await o.run(q, controller.signal, used)
+      const run = await o.run(q, controller.signal, used)
       if (mine !== runId) return
-      emit({ status: 'ready', query: q, filtersKey: usedKey, hits, error: null, retryAfter: null })
+      const { hits, keywordOnly = false } = Array.isArray(run) ? { hits: run } : run
+      emit({ status: 'ready', query: q, filtersKey: usedKey, hits, keywordOnly, error: null, retryAfter: null })
     } catch (error) {
       if (mine !== runId) return // aborted or superseded
       const d = o.describe(error)
-      emit({ status: 'error', query: q, filtersKey: usedKey, hits: state.hits, error: d.message, retryAfter: d.retryAfter ?? null })
+      emit({ status: 'error', query: q, filtersKey: usedKey, hits: state.hits, keywordOnly: state.keywordOnly, error: d.message, retryAfter: d.retryAfter ?? null })
     }
   }
 

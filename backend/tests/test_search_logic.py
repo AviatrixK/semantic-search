@@ -237,3 +237,30 @@ def test_random_text_invariants(seed):
         if not TERMINATED.search(s) and not s.endswith((",", ";", ":")) and len(s.split()) > 3:
             assert _bare(s.split()[-1]) not in _DANGLING, s  # never ends on a dangling word
     assert [len(s.split()) for s in out].count(0) == 0
+
+
+# ---------------------------------------------------------------- model-free highlights
+from app.services.search_logic import best_lexical_index  # noqa: E402
+
+
+def test_the_lexical_highlight_is_the_sentence_sharing_the_most_query_words():
+    sentences = ["Hello everyone and welcome.", "Pauses help you think before you answer.", "Thank you for coming."]
+    assert best_lexical_index("how do pauses help me think", sentences) == 1
+    assert best_lexical_index("welcome", sentences) == 0
+    assert best_lexical_index("thank coming", sentences) == 2  # 'coming' and 'thank' vs 'thank you for coming': 2 shared words
+
+
+def test_ties_go_to_the_earliest_sentence_and_no_overlap_means_no_highlight():
+    assert best_lexical_index("robots", ["Robots are here.", "More robots later."]) == 0
+    assert best_lexical_index("zebra", ["Robots are here.", "More robots later."]) is None
+
+
+def test_stop_words_and_single_letters_do_not_count_as_a_match():
+    assert best_lexical_index("what is the", ["What is the plan.", "Nothing."]) is None  # only stop words: nothing to match on
+    assert best_lexical_index("a b", ["a b c"]) is None
+
+
+def test_it_works_for_any_script_but_never_across_scripts():
+    assert best_lexical_index("फोन नंबर", ["नमस्ते दोस्तों", "मेरा फोन नंबर है"]) == 1
+    assert best_lexical_index("phone number", ["मेरा फोन नंबर है"]) is None  # an English query cannot match Devanagari words
+    assert best_lexical_index("", ["anything"]) is None and best_lexical_index("robots", []) is None

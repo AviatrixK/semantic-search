@@ -1,10 +1,6 @@
-import hashlib
 import logging
 import time
 from functools import lru_cache
-
-import numpy as np
-import redis
 
 from app.core.config import settings
 
@@ -28,11 +24,6 @@ def limit_torch_threads(n: int, torch_module=None) -> None:
         import torch
     torch.set_num_threads(max(1, n))
     log.info("worker: torch threads limited to %d", torch.get_num_threads())
-
-
-@lru_cache
-def _redis() -> redis.Redis:
-    return redis.Redis.from_url(settings.REDIS_URL, socket_connect_timeout=1, socket_timeout=1)
 
 
 _warm = False
@@ -69,27 +60,12 @@ def embed_batch(texts: list[str]) -> list[list[float]]:
 
 
 def cache_key(query: str) -> str:
-    """sha256(model + query). Whitespace is normalised so "a  b " and "a b" share an entry."""
-    normalised = " ".join(query.split())
-    return "emb:" + hashlib.sha256(f"{settings.EMBED_MODEL}\n{normalised}".encode()).hexdigest()
+    """Cache key of a query embedded by the LOCAL model (see embedders.cache_key: provider + model + dimensions + query)."""
+    from app.services import embedders
+    return embedders.cache_key(embedders.LocalEmbedder(), query)
 
 
 def embed_query(text: str, *, client=None) -> list[float]:
-    """Query embedding with a Redis cache (TTL EMBED_CACHE_TTL_SEC, default 1 day). Redis trouble never breaks
-    search: on any error we just compute the embedding."""
-    key = cache_key(text)
-    try:
-        r = client or _redis()
-        raw = r.get(key)
-        if raw and len(raw) == 4 * settings.EMBED_DIM:
-            return np.frombuffer(raw, dtype=np.float32).tolist()
-    except redis.RedisError:
-        log.warning("embedding cache unavailable (read)")
-        r = None
-    vec = embed_batch([text])[0]
-    if r is not None:
-        try:
-            r.set(key, np.asarray(vec, dtype=np.float32).tobytes(), ex=settings.EMBED_CACHE_TTL_SEC)
-        except redis.RedisError:
-            log.warning("embedding cache unavailable (write)")
-    return vec
+    """Query embedding by the LOCAL model, cached in Redis. Search uses embedders.query_vector with the configured provider."""
+    from app.services import embedders
+    return embedders.query_vector(embedders.LocalEmbedder(), text, client=client)

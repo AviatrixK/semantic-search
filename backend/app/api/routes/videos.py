@@ -12,7 +12,7 @@ from app.core.config import settings
 from app.core.db import get_db
 from app.models import Job, Video
 from app.schemas.video import ChunkOut, JobOut, UploadOut, VideoOut
-from app.services import dedupe, jobevents, retrieval, storage
+from app.services import dedupe, jobevents, languages, retrieval, storage
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["videos"])
@@ -32,7 +32,12 @@ def _size(file: UploadFile) -> int:
 
 @router.post("/videos", response_model=UploadOut, status_code=202)
 def upload_video(file: UploadFile, title: str | None = Form(None, max_length=200),
+                 language: str | None = Form(None, max_length=20, description="Spoken language, e.g. hi-IN; empty = detect automatically"),
                  admin: CurrentUser = Depends(require_admin), db: Session = Depends(get_db)):
+    try:
+        language_hint = languages.normalize_language(language)
+    except ValueError:
+        raise HTTPException(422, "Unsupported language. Pick one from the list or leave it on automatic.")
     name = file.filename or ""
     ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
     if ext not in ALLOWED_EXT:  # allow-list also keeps client-controlled text out of the storage key
@@ -55,7 +60,7 @@ def upload_video(file: UploadFile, title: str | None = Form(None, max_length=200
     storage.upload_fileobj(file.file, key, file.content_type)
 
     video = Video(id=vid, title=(title or "").strip() or name, storage_key=key, uploaded_by=uuid.UUID(admin.id),
-                  sha256=digest)
+                  sha256=digest, language_hint=language_hint)
     job = Job(video_id=vid)
     try:
         db.add(video)

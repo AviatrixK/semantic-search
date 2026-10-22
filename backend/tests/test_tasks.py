@@ -22,7 +22,7 @@ def env():
     """Fake DB session + patched I/O. Only attributes are patched (never whole modules) so the real exception
     classes still work in the worker's except clauses."""
     video = SimpleNamespace(id=uuid.uuid4(), storage_key="raw/x.mp4", status="uploaded", duration_sec=None,
-                            language=None)
+                            language=None, language_hint=None, transcriber=None, sarvam_job_id=None, sarvam_job_status=None)
     job = SimpleNamespace(stage="queued", progress=0, error=None, video_id=video.id)
     job_id = uuid.uuid4()
     db = MagicMock()

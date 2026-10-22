@@ -29,13 +29,14 @@ def _load_wav(path: str) -> np.ndarray:
     return np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
 
 
-def transcribe(wav_path: str, on_progress: Callable[[float, float], None] | None = None) -> tuple[list[dict], str]:
+def transcribe(wav_path: str, on_progress: Callable[[float, float], None] | None = None,
+               language: str | None = None) -> tuple[list[dict], str]:
     """Returns ([{start, end, text}], detected_language). Always hands faster-whisper a numpy array, never a path.
     `on_progress(done_sec, total_sec)` is called after each segment (segments are a lazy generator, so this is
-    where the transcription time is actually spent)."""
+    where the transcription time is actually spent). `language`: Whisper's own code ("hi"), or None to let it detect."""
     audio = _load_wav(wav_path)
     total = len(audio) / SAMPLE_RATE
-    segments, info = _model().transcribe(audio, vad_filter=True)
+    segments, info = _model().transcribe(audio, vad_filter=True, language=language)
     out = []
     for s in segments:
         out.append({"start": round(s.start, 2), "end": round(s.end, 2), "text": s.text.strip()})

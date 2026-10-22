@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import type { DragEvent, FormEvent } from 'react'
 import { formatBytes } from '../lib/format'
+import { AUTO_LANGUAGE, LANGUAGES } from '../lib/languages'
 import { ALLOWED_EXTENSIONS, defaultTitle, validateVideoFile } from '../lib/uploadValidation'
 import styles from './UploadForm.module.css'
 
@@ -8,11 +9,12 @@ interface Staged {
   key: string
   file: File
   title: string
+  language: string
 }
 
 interface Props {
   maxMb: number
-  onSubmit: (entries: { file: File; title: string }[]) => void
+  onSubmit: (entries: { file: File; title: string; language: string }[]) => void
 }
 
 const ACCEPT = ALLOWED_EXTENSIONS.map((e) => `.${e}`).join(',')
@@ -31,7 +33,7 @@ export default function UploadForm({ maxMb, onSubmit }: Props) {
     for (const file of files) {
       const problem = validateVideoFile(file, maxMb)
       if (problem) rejected.push(problem)
-      else accepted.push({ key: keyOf(file), file, title: defaultTitle(file.name) })
+      else accepted.push({ key: keyOf(file), file, title: defaultTitle(file.name), language: AUTO_LANGUAGE })
     }
     setProblems(rejected)
     setStaged((cur) => [...cur, ...accepted.filter((a) => !cur.some((c) => c.key === a.key))])
@@ -46,7 +48,7 @@ export default function UploadForm({ maxMb, onSubmit }: Props) {
   function submit(e: FormEvent) {
     e.preventDefault()
     if (staged.length === 0) return
-    onSubmit(staged.map(({ file, title }) => ({ file, title })))
+    onSubmit(staged.map(({ file, title, language }) => ({ file, title, language })))
     setStaged([])
     setProblems([])
   }
@@ -99,6 +101,16 @@ export default function UploadForm({ maxMb, onSubmit }: Props) {
                   placeholder="Title"
                   onChange={(e) => setStaged((cur) => cur.map((c) => (c.key === s.key ? { ...c, title: e.target.value } : c)))}
                 />
+                <select
+                  className={`input ${styles.language}`}
+                  aria-label={`Spoken language of ${s.file.name}`}
+                  title="The language spoken in the video. Detect automatically works for most videos; choose one if it is wrong."
+                  value={s.language}
+                  onChange={(e) => setStaged((cur) => cur.map((c) => (c.key === s.key ? { ...c, language: e.target.value } : c)))}
+                >
+                  <option value={AUTO_LANGUAGE}>Detect automatically</option>
+                  {LANGUAGES.map((l) => <option key={l.code} value={l.code}>{l.label}</option>)}
+                </select>
                 <button
                   type="button"
                   className="btn btn-secondary"

@@ -8,6 +8,7 @@ import { useCountdown } from '../hooks/useCountdown'
 import { useSearch } from '../hooks/useSearch'
 import { useVideos } from '../hooks/useVideos'
 import { emptyResults } from '../lib/emptyResults'
+import { KEYWORD_ONLY_NOTE } from '../lib/searchFallback'
 import { MODE_OPTIONS, filtersKey, filtersToParams, modeOfKey, parseFilters } from '../lib/searchParams'
 import type { SearchFilters } from '../lib/searchParams'
 import styles from './Search.module.css'
@@ -73,6 +74,10 @@ export default function Search() {
           </span>
         )}
       </div>
+
+      {state.status !== 'idle' && state.keywordOnly && hasHits && (
+        <p className={styles.fallback} role="status">{KEYWORD_ONLY_NOTE}</p>
+      )}
 
       {q.length < 2 && (
         <p className={styles.hint}>Type at least 2 characters in the search box above and press Enter. Describe an idea in your own words, or type a name exactly as it is said.</p>

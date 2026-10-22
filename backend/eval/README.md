@@ -40,6 +40,33 @@ rescores the top 20). Tables are printed overall and per query type. `hybrid+rer
 (~90 MB) on first use; use `--skip-rerank` to avoid that, or it is skipped (and reported) if the model cannot load.
 Expectation: hybrid >= vector on `exact`; the script warns when it is not.
 
+## Comparing embedding providers (`run_provider_eval.py`)
+Evaluates each provider on ITS OWN stored vectors (they live side by side in `chunk_embeddings`, one set per `provider/model@dims`),
+on the same gold queries and the same chunks, so the only thing that differs is the model.
+
+```powershell
+# 1. fill the vectors of every provider you want to compare (embed-only: no re-transcription; resumable; --dry-run shows the cost first)
+docker compose exec api python -m app.scripts.reprocess --embed-provider gemini --dry-run
+docker compose exec api python -m app.scripts.reprocess --embed-provider gemini
+# 2. compare (asks before making real API calls: one query embedding per gold query and provider)
+docker compose exec api python eval/run_provider_eval.py --providers local,gemini,cohere,openai
+docker compose exec api python eval/run_provider_eval.py --inr-per-usd 88 --assume-both-variants
+```
+It prints Recall@1, Recall@5, MRR and median search latency per provider and mode (vector, hybrid), the cold latency (first,
+uncached search, includes the provider round trip), and the estimated cost per 1,000 searches and per hour of video.
+Saves `eval/results/providers-<timestamp>.json`.
+
+- A provider that is not configured, or has no vectors yet, is skipped with the reason. One that fails or times out DURING the run is
+  reported as invalid, not scored: search would silently fall back to keyword-only for it, which would make the numbers meaningless.
+- Cost uses list prices (`app/services/pricing.py`, with source links and dates) and about 4 characters per token unless the provider
+  reports tokens. Indic scripts use more tokens per character, so real costs for Hindi and similar are higher.
+- Sarvam transcription is shown separately in INR per hour of video: ONE speech-to-text job (INR 30/h) plus INR 20 per 10K characters
+  for each text version (romanised, English) made from the chunk text; the characters per hour come from the corpus being evaluated. No
+  exchange rate is assumed: pass `--inr-per-usd` to get a combined USD total.
+- `MIN_SCORE` (0.25) was tuned for the local model; other models spread their cosine similarities differently, so each provider has its
+  own `MIN_SCORE_<PROVIDER>` (empty = `MIN_SCORE`); the JSON records the value used for every provider. If a provider shows a
+  suspiciously low Recall, look at `per_query` in the JSON before concluding it is a worse model.
+
 ## Results
 Each run saves `eval/results/retrieval-<timestamp>.json` with the settings used (models, `MIN_SCORE`,
 RRF k...) and every per-query outcome, so a miss can be inspected and runs can be compared over time.

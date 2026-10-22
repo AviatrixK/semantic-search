@@ -49,7 +49,7 @@ os.environ.update({
     "RATE_LOGIN_PER_MIN": "5",
     "RATE_SEARCH_PER_MIN": "30",
     "MIN_SCORE": "0.25",
-    "EMBED_CACHE_TTL_SEC": "86400",
+    "EMBED_CACHE_TTL_SEC": "604800",
     "SSE_KEEPALIVE_SEC": "0.2",
 })
 

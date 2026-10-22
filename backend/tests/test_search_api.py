@@ -246,8 +246,10 @@ def test_hybrid_keeps_the_semantic_results_and_marks_chunks_both_searches_found(
     assert [h["rrf"] for h in hybrid] == sorted((h["rrf"] for h in hybrid), reverse=True)
 
 
-def test_keyword_mode_stems_supports_phrases_and_exclusion(seeded):
-    assert ("Public speaking", 0) in starts(seeded.get("/api/search?q=robot&mode=keyword").json())  # robot -> robots
+def test_keyword_mode_uses_both_indexes_exact_words_stems_phrases_and_exclusion(seeded):
+    assert ("Public speaking", 0) in starts(seeded.get("/api/search?q=ROBOTS&mode=keyword").json())  # case does not matter
+    # Chunks here have no text_en, so their `text` feeds the 'english' index: stemming works again ("robot" finds "robots")
+    assert ("Public speaking", 0) in starts(seeded.get("/api/search?q=robot&mode=keyword").json())
     assert starts(seeded.get('/api/search?q="teach us"&mode=keyword').json()) == [("Public speaking", 0)]
     only_old = seeded.get("/api/search?q=robots+-teach&mode=keyword").json()
     assert starts(only_old) == [("Old talk", 0)]

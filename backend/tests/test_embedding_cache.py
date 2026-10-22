@@ -29,7 +29,7 @@ def test_second_lookup_is_served_from_cache():
     assert model.call_count == 1
     (key,) = r.data
     assert key.startswith("emb:") and len(key) == 4 + 64  # sha256 hex
-    assert r.ttl[key] == 86400  # one day
+    assert r.ttl[key] == 7 * 86400  # seven days
 
 
 def test_whitespace_variants_share_an_entry_but_other_queries_do_not():

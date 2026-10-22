@@ -12,6 +12,7 @@ from collections import defaultdict
 from sqlalchemy import func, select
 from sqlalchemy.exc import ProgrammingError
 
+from app.core.config import settings
 from app.core.db import SessionLocal
 from app.models import Chunk, ChunkSentence, Video
 from app.services.search_logic import split_sentences
@@ -28,6 +29,10 @@ def classify(chunk_text: str, stored: list[str]) -> str:
 
 
 def main() -> int:
+    from app.services import embedders
+    if not embedders.get_embedder().uses_legacy_column:
+        print(f"EMBED_PROVIDER={settings.EMBED_PROVIDER}: highlights are lexical and need no sentence vectors, nothing to check.")
+        return 0
     db = SessionLocal()
     try:
         try:

@@ -1,4 +1,5 @@
 import { formatBytes } from './format.js'
+import { AUTO_LANGUAGE, isLanguageChoice } from './languages.js'
 
 /** Same allow-list as the backend (app/api/routes/videos.py). The server stays the authority; this gives instant feedback. */
 export const ALLOWED_EXTENSIONS = ['mp4', 'webm', 'mov', 'mkv'] as const
@@ -47,9 +48,10 @@ export function validateVideoFile(file: FileLike, maxMb: number): string | null 
  * The multipart body for POST /api/videos. The file is re-wrapped with the MIME type the backend expects, because
  * browsers often report "" for .mkv (the server would answer 415). Wrapping a Blob copies no bytes.
  */
-export function buildUploadForm(file: File, title: string): FormData {
+export function buildUploadForm(file: File, title: string, language: string = AUTO_LANGUAGE): FormData {
   const form = new FormData()
   form.append('file', new File([file], file.name, { type: mimeForFile(file.name) ?? file.type }))
   if (title.trim()) form.append('title', title.trim())
+  if (language && isLanguageChoice(language)) form.append('language', language) // none = the server detects the language itself
   return form
 }

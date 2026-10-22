@@ -1,3 +1,5 @@
+import logging
+
 from celery import Celery
 from celery.signals import setup_logging as celery_setup_logging
 from celery.signals import worker_process_init
@@ -23,4 +25,7 @@ def _configure_logging(**_) -> None:
 def _limit_threads(**_) -> None:
     """Runs in every worker process before its first job: keeps the heavy models from taking every CPU."""
     from app.services.embedding import limit_torch_threads
-    limit_torch_threads(settings.TORCH_THREADS)
+    try:
+        limit_torch_threads(settings.TORCH_THREADS)
+    except ImportError:  # an image without the local models (hosted transcription + embeddings only) has no torch to limit
+        logging.getLogger(__name__).info("torch is not installed: nothing to limit")

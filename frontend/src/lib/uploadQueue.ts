@@ -9,6 +9,8 @@ export type Phase = 'queued' | 'uploading' | 'processing' | 'error'
 export interface QueueItem<F extends QueueFileLike = QueueFileLike> {
   id: string
   title: string
+  /** Spoken language chosen on upload ("hi-IN"), or "" for automatic detection. */
+  language: string
   fileName: string
   fileSize: number
   /** Dropped after the upload finishes so the browser can free the file. */
@@ -26,7 +28,7 @@ export interface QueueState<F extends QueueFileLike = QueueFileLike> {
 }
 
 export type QueueAction<F extends QueueFileLike = QueueFileLike> =
-  | { type: 'enqueue'; entries: { id: string; file: F; title: string }[] }
+  | { type: 'enqueue'; entries: { id: string; file: F; title: string; language?: string }[] }
   | { type: 'start'; id: string }
   | { type: 'progress'; id: string; loaded: number; total: number }
   | { type: 'uploaded'; id: string; videoId: string; jobId: string }
@@ -59,7 +61,7 @@ export function queueReducer<F extends QueueFileLike>(state: QueueState<F>, acti
         items: [
           ...state.items,
           ...action.entries.map<QueueItem<F>>((e) => ({
-            id: e.id, title: e.title, fileName: e.file.name, fileSize: e.file.size, file: e.file,
+            id: e.id, title: e.title, language: e.language ?? '', fileName: e.file.name, fileSize: e.file.size, file: e.file,
             phase: 'queued', loaded: 0, total: e.file.size, videoId: null, jobId: null, error: null,
           })),
         ],
@@ -83,7 +85,7 @@ export function queueReducer<F extends QueueFileLike>(state: QueueState<F>, acti
         items: [
           ...state.items,
           {
-            id: action.id, title: action.title, fileName: action.title, fileSize: 0, file: null, phase: 'processing',
+            id: action.id, title: action.title, language: '', fileName: action.title, fileSize: 0, file: null, phase: 'processing',
             loaded: 0, total: 0, videoId: action.videoId, jobId: action.jobId, error: null,
           },
         ],

@@ -3,14 +3,16 @@ import uuid
 from collections import defaultdict
 from datetime import date, datetime, time, timezone
 
-from sqlalchemy import func, literal_column, select, text
+from sqlalchemy import func, literal_column, or_, select, text
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models import Chunk, ChunkSentence, Video
+from app.services import embedders, vectorstore
 from app.services.embedding import embed_batch, embed_query
-from app.services.search_logic import apply_threshold, best_index, dedupe_overlapping, rrf_merge, split_sentences
+from app.services.search_logic import (apply_threshold, best_index, best_lexical_index, dedupe_overlapping, rrf_merge,
+                                       split_sentences)
 from app.services.timing import Timings, measure
 
 log = logging.getLogger(__name__)
@@ -38,7 +40,7 @@ def _add_highlights(db: Session, hits: list[dict], query_vec: list[float], timin
     """Sets hit["highlight"] to the sentence of the chunk closest to the query (cosine). Sentence vectors come from
     chunk_sentences (computed at ingest). Chunks without usable stored sentences (ingested before the table
     existed and not backfilled) fall back to embedding their sentences now, all in one batch: correct but ~10x
-    slower (about 500 ms for k=10 on CPU)."""
+    slower (about 500 ms for k=10 on CPU). LOCAL embedder only: see _lexical_highlights for the others."""
     per_hit = [split_sentences(h["text"]) or [h["text"]] for h in hits]
     multi = [i for i, sentences in enumerate(per_hit) if len(sentences) > 1]
     for i, h in enumerate(hits):
@@ -68,6 +70,17 @@ def _add_highlights(db: Session, hits: list[dict], query_vec: list[float], timin
             pos += n
 
 
+def _lexical_highlights(hits: list[dict], query: str, timings: Timings | None = None) -> None:
+    """Highlight without any model: the sentence sharing the most words with the query. Used for hosted embedding providers (they
+    store no per-sentence vectors) and whenever the query embedding is unavailable."""
+    for h in hits:
+        sentences = split_sentences(h["text"]) or [h["text"]]
+        i = 0 if len(sentences) == 1 else best_lexical_index(query, sentences)
+        h["highlight"] = sentences[i] if i is not None else None
+    if timings is not None:
+        timings.count("lexical", len(hits))
+
+
 def _filters(stmt, video_id, uploaded_after):
     if video_id:
         stmt = stmt.where(Chunk.video_id == video_id)
@@ -81,90 +94,138 @@ def _row_to_hit(r, score: float) -> dict:
             "end_sec": r.end_sec, "text": r.text, "score": round(score, 4)}
 
 
+def _query_vec(embedder, query: str, timings: Timings | None = None) -> list[float] | None:
+    """The query's vector, or None when a hosted provider cannot be reached in time (EMBED_QUERY_TIMEOUT_SEC, one retry): the
+    search then runs on keywords alone, and says so in the log (WARNING) and in the X-Search-Fallback response header."""
+    try:
+        with measure(timings, "embed"):
+            if embedder.uses_legacy_column:
+                return embed_query(query)  # the local model (cached in Redis like every query vector)
+            return embedders.query_vector(embedder, query)
+    except embedders.EmbeddingError as exc:
+        log.warning("query embedding failed (%s: %s): falling back to keyword-only search", type(exc).__name__, exc)
+        if timings is not None:
+            timings.count("embed_failed")
+        return None
+
+
 def _vector_candidates(db: Session, qv: list[float], limit: int, video_id, uploaded_after,
-                       timings: Timings | None = None) -> list[dict]:
-    """The `limit` chunks closest to the query vector, best first, score = cosine similarity."""
+                       timings: Timings | None = None, embedder=None) -> list[dict]:
+    """The `limit` chunks closest to the query vector, best first, score = cosine similarity. With a hosted provider each chunk
+    is matched through the better of its native-text and English-text vectors."""
+    embedder = embedder or embedders.get_embedder()
+    if not embedder.uses_legacy_column:
+        with measure(timings, "vector_sql"):
+            return vectorstore.nearest(db, embedder, qv, limit, video_id, uploaded_after)
     dist = Chunk.embedding.cosine_distance(qv)
     stmt = _filters(select(Chunk.id.label("chunk_id"), Chunk.video_id, Video.title, Chunk.start_sec, Chunk.end_sec, Chunk.text,
-                           dist.label("dist")).join(Video, Video.id == Chunk.video_id).order_by(dist).limit(limit),
-                    video_id, uploaded_after)
+                           dist.label("dist")).join(Video, Video.id == Chunk.video_id).where(Chunk.embedding.is_not(None))
+                    .order_by(dist).limit(limit), video_id, uploaded_after)
     # HNSW returns at most ef_search rows (default 40) however large LIMIT is, and filters apply after the index scan.
     with measure(timings, "vector_sql"):
         db.execute(text(f"SET LOCAL hnsw.ef_search = {min(1000, max(100, limit * 2))}"))
         return [_row_to_hit(r, 1 - r.dist) for r in db.execute(stmt)]
 
 
-def _finish(db: Session, hits: list[dict], qv: list[float] | None, highlight: bool,
-            timings: Timings | None = None) -> list[dict]:
-    if highlight and hits and qv is not None:
-        _add_highlights(db, hits, qv, timings)
-    else:
+def _finish(db: Session, hits: list[dict], qv: list[float] | None, highlight: bool, timings: Timings | None = None,
+            *, query: str = "", embedder=None) -> list[dict]:
+    embedder = embedder or embedders.get_embedder()
+    if not highlight or not hits:
         for h in hits:
             h["highlight"] = None
+    elif qv is not None and embedder.supports_sentence_vectors:
+        _add_highlights(db, hits, qv, timings)
+    else:
+        _lexical_highlights(hits, query, timings)
     return hits
 
 
 def vector_search(db: Session, query: str, k: int = 10, video_id: uuid.UUID | None = None,
                   uploaded_after: date | None = None, min_score: float | None = None,
-                  highlight: bool = True, timings: Timings | None = None) -> list[dict]:
+                  highlight: bool = True, timings: Timings | None = None, embedder=None) -> list[dict]:
     """Semantic search. Over-fetches candidates, drops weak hits, dedupes overlapping chunks, keeps the best k.
-    `uploaded_after`: only videos uploaded on or after that date (00:00 UTC)."""
-    min_score = settings.MIN_SCORE if min_score is None else min_score
-    with measure(timings, "embed"):
-        qv = embed_query(query)
-    hits = _vector_candidates(db, qv, min(k * OVERFETCH, MAX_CANDIDATES), video_id, uploaded_after, timings)
+    `uploaded_after`: only videos uploaded on or after that date (00:00 UTC). If the query cannot be embedded (hosted provider
+    down or slow) it answers with a keyword search instead."""
+    embedder = embedder or embedders.get_embedder()
+    min_score = settings.min_score_for(embedder.provider) if min_score is None else min_score
+    qv = _query_vec(embedder, query, timings)
+    if qv is None:
+        return keyword_search(db, query, k, video_id, uploaded_after, highlight, timings, embedder=embedder)
+    hits = _vector_candidates(db, qv, min(k * OVERFETCH, MAX_CANDIDATES), video_id, uploaded_after, timings, embedder)
     hits = dedupe_overlapping(apply_threshold(hits, min_score))[:k]
-    return _finish(db, hits, qv, highlight, timings)
+    return _finish(db, hits, qv, highlight, timings, query=query, embedder=embedder)
 
 
 def _keyword_candidates(db: Session, query: str, limit: int, video_id, uploaded_after,
-                        qv: list[float] | None, timings: Timings | None = None) -> list[dict]:
-    """Chunks whose `tsv` matches the query, best ts_rank_cd first. websearch_to_tsquery understands plain text,
-    "quoted phrases", OR and -exclusions and never raises on odd input; a query of only stop words matches nothing.
-    score = cosine similarity when the query vector is known (hybrid), otherwise rank / (1 + rank), a 0..1 keyword
-    relevance."""
-    tsq = func.websearch_to_tsquery("english", query)
-    tsv = literal_column("chunks.tsv")
-    rank = func.ts_rank_cd(tsv, tsq)
+                        qv: list[float] | None, timings: Timings | None = None, embedder=None) -> list[dict]:
+    """Chunks matching the query in EITHER keyword index, best first. Two indexes, two tsqueries: `tsv` ('simple': no stemming, no
+    stop words, any script) over the native text and its romanisation, and `tsv_en` ('english': stemming, so "speaking" finds "speak")
+    over the English text. A chunk found by both ranks higher (the two ts_rank_cd values are added). websearch_to_tsquery understands
+    plain text, "quoted phrases", OR and -exclusions and never raises on odd input.
+    score = cosine similarity when the query vector is known (hybrid), otherwise rank / (1 + rank), a 0..1 keyword relevance."""
+    embedder = embedder or embedders.get_embedder()
+    tsq = func.websearch_to_tsquery("simple", query)
+    tsq_en = func.websearch_to_tsquery("english", query)
+    tsv, tsv_en = literal_column("chunks.tsv"), literal_column("chunks.tsv_en")
+    rank = func.ts_rank_cd(tsv, tsq) + func.ts_rank_cd(tsv_en, tsq_en)
     cols = [Chunk.id.label("chunk_id"), Chunk.video_id, Video.title, Chunk.start_sec, Chunk.end_sec, Chunk.text, rank.label("rank")]
-    if qv is not None:
+    legacy_cosine = qv is not None and embedder.uses_legacy_column
+    if legacy_cosine:
         cols.append(Chunk.embedding.cosine_distance(qv).label("dist"))
-    stmt = _filters(select(*cols).join(Video, Video.id == Chunk.video_id).where(tsv.op("@@")(tsq))
+    stmt = _filters(select(*cols).join(Video, Video.id == Chunk.video_id).where(or_(tsv.op("@@")(tsq), tsv_en.op("@@")(tsq_en)))
                     .order_by(rank.desc(), Chunk.video_id, Chunk.start_sec).limit(limit), video_id, uploaded_after)
     with measure(timings, "keyword_sql"):
-        return [_row_to_hit(r, 1 - r.dist if qv is not None else r.rank / (1 + r.rank)) for r in db.execute(stmt)]
+        rows = list(db.execute(stmt))
+        cosine: dict = {}
+        if qv is not None and not embedder.uses_legacy_column and rows:
+            cosine = vectorstore.score_chunks(db, embedder, qv, [r.chunk_id for r in rows])
+    out = []
+    for r in rows:
+        if legacy_cosine:
+            score = 1 - r.dist if r.dist is not None else 0.0
+        elif qv is not None:
+            score = cosine.get(r.chunk_id, 0.0)
+        else:
+            score = r.rank / (1 + r.rank)
+        out.append(_row_to_hit(r, score))
+    return out
 
 
 def keyword_search(db: Session, query: str, k: int = 10, video_id: uuid.UUID | None = None,
                    uploaded_after: date | None = None, highlight: bool = True,
-                   timings: Timings | None = None) -> list[dict]:
-    """Full-text search (no model, so no embedding cost): exact words, names and acronyms, with English stemming.
-    Overlapping chunks are collapsed like in vector search. Highlights embed the sentences of the k hits, so
-    `highlight=False` keeps this mode model-free."""
+                   timings: Timings | None = None, embedder=None) -> list[dict]:
+    """Full-text search: exact words, names and acronyms in the native and romanised text, plus stemmed matches in the English text. Overlapping chunks are
+    collapsed like in vector search. With the local model, highlights embed the sentences of the k hits (`highlight=False` keeps
+    this mode model-free); hosted providers are never called here: highlights are lexical."""
+    embedder = embedder or embedders.get_embedder()
     hits = dedupe_overlapping(_keyword_candidates(db, query, min(k * OVERFETCH, MAX_CANDIDATES), video_id, uploaded_after,
-                                                  None, timings))[:k]
-    qv = None
-    if highlight and hits:
-        with measure(timings, "embed"):
-            qv = embed_query(query)
-    return _finish(db, hits, qv, highlight, timings)
+                                                  None, timings, embedder))[:k]
+    qv = _query_vec(embedder, query, timings) if highlight and hits and embedder.supports_sentence_vectors else None
+    return _finish(db, hits, qv, highlight, timings, query=query, embedder=embedder)
 
 
 def hybrid_search(db: Session, query: str, k: int = 10, video_id: uuid.UUID | None = None,
                   uploaded_after: date | None = None, min_score: float | None = None,
-                  highlight: bool = True, rerank: bool | None = None, timings: Timings | None = None) -> list[dict]:
+                  highlight: bool = True, rerank: bool | None = None, timings: Timings | None = None,
+                  embedder=None) -> list[dict]:
     """Vector + keyword search merged with Reciprocal Rank Fusion. Each side contributes its top HYBRID_CANDIDATES
     (vector candidates below MIN_SCORE are dropped first: a weak neighbour should not collect rank credit; keyword
     candidates are kept, an exact word match is evidence on its own). Overlapping chunks collapse to the best fused
     one; with RERANK on, the top RERANK_CANDIDATES are rescored by a cross-encoder. `score` stays the cosine
-    similarity (what the UI shows), `rrf` is the fused ranking score, `found_by` says which searches returned it."""
-    min_score = settings.MIN_SCORE if min_score is None else min_score
+    similarity (what the UI shows), `rrf` is the fused ranking score, `found_by` says which searches returned it.
+    If the query cannot be embedded in time (hosted provider down or slow), only the keyword side runs."""
     use_rerank = settings.RERANK if rerank is None else rerank
-    with measure(timings, "embed"):
-        qv = embed_query(query)
+    embedder = embedder or embedders.get_embedder()
+    min_score = settings.min_score_for(embedder.provider) if min_score is None else min_score
+    qv = _query_vec(embedder, query, timings)
     n = max(settings.HYBRID_CANDIDATES, k)
-    vec = apply_threshold(_vector_candidates(db, qv, n, video_id, uploaded_after, timings), min_score)
-    kw = _keyword_candidates(db, query, n, video_id, uploaded_after, qv, timings)
+    if qv is None:  # keyword-only fallback: already ranked, nothing to fuse
+        kw = dedupe_overlapping(_keyword_candidates(db, query, n, video_id, uploaded_after, None, timings, embedder))[:k]
+        for h in kw:
+            h["found_by"] = ["keyword"]
+        return _finish(db, kw, None, highlight, timings, query=query, embedder=embedder)
+    vec = apply_threshold(_vector_candidates(db, qv, n, video_id, uploaded_after, timings, embedder), min_score)
+    kw = _keyword_candidates(db, query, n, video_id, uploaded_after, qv, timings, embedder)
     merged = dedupe_overlapping(rrf_merge({"vector": vec, "keyword": kw}, k=settings.RRF_K), key="rrf")
     if use_rerank:
         from app.services import rerank as reranker
@@ -172,7 +233,7 @@ def hybrid_search(db: Session, query: str, k: int = 10, video_id: uuid.UUID | No
             hits = reranker.rerank(query, merged, k)
     else:
         hits = merged[:k]
-    return _finish(db, hits, qv, highlight, timings)
+    return _finish(db, hits, qv, highlight, timings, query=query, embedder=embedder)
 
 
 def list_chunks(db: Session, video_id: uuid.UUID) -> list[dict]:

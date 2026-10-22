@@ -29,8 +29,10 @@ class Timings:
         return ", ".join(parts)
 
     def highlight_summary(self) -> str:
-        """e.g. "stored=8, fallback=0, single=2": where each result's highlight came from."""
-        return ", ".join(f"{k}={self.counts.get(k, 0)}" for k in ("stored", "fallback", "single"))
+        """e.g. "stored=8, fallback=0, single=2": where each result's highlight came from. " , lexical=N" is added only when N > 0
+        (model-free highlights: hosted embedding providers, or the keyword-only fallback)."""
+        out = ", ".join(f"{k}={self.counts.get(k, 0)}" for k in ("stored", "fallback", "single"))
+        return out + f", lexical={self.counts['lexical']}" if self.counts.get("lexical") else out
 
 
 def measure(timings: "Timings | None", name: str):

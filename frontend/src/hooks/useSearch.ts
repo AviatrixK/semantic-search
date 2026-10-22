@@ -4,6 +4,7 @@ import type { SearchHit } from '../api'
 import { ApiError, describeError } from '../api/errors'
 import { IDLE, createSearcher } from '../lib/searcher'
 import type { SearchState, Searcher } from '../lib/searcher'
+import { isKeywordOnly } from '../lib/searchFallback'
 import { searchUrl } from '../lib/searchParams'
 import type { SearchFilters } from '../lib/searchParams'
 
@@ -21,7 +22,14 @@ export function useSearch(initial: SearchFilters) {
   useEffect(() => {
     const s = createSearcher({
       filters: start.current,
-      run: (q, signal, filters) => api.request<SearchHit[]>(searchUrl(q, RESULTS_PER_SEARCH, filters), { signal }),
+      run: async (q, signal, filters) => {
+        let keywordOnly = false
+        const hits = await api.request<SearchHit[]>(searchUrl(q, RESULTS_PER_SEARCH, filters), {
+          signal,
+          onResponseHeaders: (h) => (keywordOnly = isKeywordOnly(h)),
+        })
+        return { hits, keywordOnly }
+      },
       onState: setState,
       describe: (e) => ({ message: describeError(e, 'search'), retryAfter: e instanceof ApiError ? e.retryAfter : undefined }),
     })

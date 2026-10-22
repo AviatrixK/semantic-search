@@ -7,7 +7,15 @@ from app.core.config import settings
 class ChunkSpan:
     start: float
     end: float
-    text: str
+    text: str  # the spoken text in its own language and script
+    text_roman: str | None = None  # Latin-script variant (hosted transcription only)
+    text_en: str | None = None  # English translation (hosted transcription only)
+
+
+def _joined(segs: list[dict], key: str) -> str | None:
+    """The `key` variant of a run of segments, joined like the main text; None when no segment has it."""
+    parts = [s[key].strip() for s in segs if (s.get(key) or "").strip()]
+    return " ".join(parts) if parts else None
 
 
 def window(segments: list[dict], size: float | None = None, overlap: float | None = None) -> list[ChunkSpan]:
@@ -31,7 +39,8 @@ def window(segments: list[dict], size: float | None = None, overlap: float | Non
         j = i
         while j < n and (segs[j]["end"] - start <= size or j == i):
             j += 1
-        chunks.append(ChunkSpan(start, segs[j - 1]["end"], " ".join(s["text"] for s in segs[i:j])))
+        chunks.append(ChunkSpan(start, segs[j - 1]["end"], " ".join(s["text"] for s in segs[i:j]),
+                                _joined(segs[i:j], "text_roman"), _joined(segs[i:j], "text_en")))
         if j >= n:
             break
         boundary = segs[j - 1]["end"] - overlap

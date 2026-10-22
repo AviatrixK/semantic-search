@@ -177,7 +177,7 @@ def main(argv: list[str] | None = None) -> int:
     for w in warnings(results):
         print("WARNING:", w)
     config = {"queries_file": str(args.queries), "k": args.k, "repeats": args.repeats, "embed_model": settings.EMBED_MODEL,
-              "min_score": settings.MIN_SCORE, "hybrid_candidates": settings.HYBRID_CANDIDATES, "rrf_k": settings.RRF_K,
+              "min_score": settings.min_score_for(settings.EMBED_PROVIDER), "hybrid_candidates": settings.HYBRID_CANDIDATES, "rrf_k": settings.RRF_K,
               "rerank_model": settings.RERANK_MODEL, "rerank_candidates": settings.RERANK_CANDIDATES,
               "query_counts": counts, "videos": videos,
               "latency_note": "median of repeated warm calls per query; query embedding cached, highlight off"}

@@ -95,6 +95,26 @@ docker compose exec api python -m app.scripts.backfill_sentences
 Until the backfill runs, highlights still work but are computed per request (about half a second).
 Re-run the backfill whenever the sentence splitter changes: it rebuilds stale rows as well as filling in missing ones.
 
+## Hosted models (optional, off by default)
+Transcription and embeddings can use hosted services instead of the local models. Nothing changes until you switch the settings
+(`.env.example` lists them): `TRANSCRIBER=whisper|sarvam` and `EMBED_PROVIDER=local|gemini|cohere|openai`, each with its API key.
+Existing database (once, in this order): `docker compose exec -T postgres psql -U svs -d svs -P pager=off -v ON_ERROR_STOP=1 < db/migrations/2026-10-18-hosted-models.sql`
+and then `... < db/migrations/2026-10-20-sarvam-single-job.sql` (job id/status columns on `videos`, the `tsv_en` English index; idempotent).
+Compare providers on your own gold queries before switching (hosted vectors live next to the local ones, one set per model):
+```powershell
+docker compose exec api python -m app.scripts.reprocess --embed-provider gemini --dry-run     # plan and estimated cost, changes nothing
+docker compose exec api python -m app.scripts.reprocess --embed-provider gemini               # embed existing videos (resumable)
+docker compose exec api python eval/run_provider_eval.py --providers local,gemini            # Recall@5, MRR, latency, cost (see backend/eval/README.md)
+docker compose exec api python -m app.scripts.reprocess --transcriber sarvam --dry-run        # re-transcribe with Sarvam: cost estimate first
+```
+Notes: Sarvam transcribes each video once (INR 30/h); the romanised and English text of each chunk then come from its text APIs
+(INR 20 per 10K characters each, about INR 312 more per hour of video: `SARVAM_TEXT_VARIANTS` chooses which to make). A retry after a failure
+resumes the saved Sarvam job (`videos.sarvam_job_id`) instead of starting, and paying for, a new one. `SARVAM_MODEL=saaras:v4` falls back
+to v3 for languages it does not take. `MIN_SCORE_<PROVIDER>` sets the similarity cut-off per embedding provider.
+If an embedding provider is down or slow, search answers from keywords alone (`X-Search-Fallback: keyword-only`) and the page says so.
+Keyword search uses two indexes: `simple` over the native and romanised text (words matched as written) and `english` over the English
+text (stemmed, so "speaking" finds "speak").
+
 ## Evaluation
 `backend/eval/` measures search quality against a hand-labelled gold set (Recall@1/@5, MRR, latency). See `backend/eval/README.md`:
 `docker compose exec api python eval/add_query.py`, then `docker compose exec api python eval/run_eval.py`.
