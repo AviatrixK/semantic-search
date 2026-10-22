@@ -55,6 +55,8 @@ os.environ.update({
     # text-variant provider is off unless a test turns it on with a mocked client.
     "GEMINI_API_KEY": "", "SARVAM_API_KEY": "", "COHERE_API_KEY": "", "OPENAI_API_KEY": "",
     "TEXT_VARIANT_PROVIDER": "none",
+    # ... and the engines are the local defaults whatever the developer's .env selects (it may already be switched to hosted ones)
+    "TRANSCRIBER": "whisper", "EMBED_PROVIDER": "local", "SARVAM_MODEL": "saaras:v3", "TEXT_VARIANT_MODEL": "gemini-3.1-flash-lite",
 })
 
 # /db/init.sql inside the api container (compose mounts ./db there); <repo>/db/init.sql on the host.

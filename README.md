@@ -117,6 +117,8 @@ A retry after a failure resumes the saved Sarvam job (`videos.sarvam_job_id`) in
 provider. If an embedding provider is down or slow, search answers from keywords alone (`X-Search-Fallback: keyword-only`) and the page says so.
 Keyword search uses two indexes: `simple` over the native and romanised text (words matched as written) and `english` over the English
 text (stemmed, so "speaking" finds "speak").
+To look at what Sarvam really returned for a job (no new job, no upload, no key saved):
+`docker compose exec api python -m app.scripts.sarvam_debug --job-id <id>` writes `debug/sarvam_<id>.json` (gitignored) and prints its keys.
 Existing database, third migration: `... < db/migrations/2026-10-22-text-variants.sql` (status and token columns on `videos`; idempotent).
 
 ## Evaluation

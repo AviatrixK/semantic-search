@@ -63,6 +63,7 @@ class Settings(BaseSettings):
     TEXT_VARIANT_TIMEOUT_SEC: float = 60.0
     TEXT_VARIANT_RETRIES: int = 4  # extra attempts after 429 / 5xx / timeout, with exponential backoff (1, 2, 4, 8 s)
     SARVAM_POLL_SEC: float = 5.0
+    SARVAM_IO_RETRIES: int = 3  # extra attempts for each upload / download / status call after a dropped connection, timeout, 429 or 5xx
     SARVAM_JOB_TIMEOUT_SEC: int = 3 * 3600  # give up waiting for a batch job after this long
     SARVAM_MAX_FILE_SEC: int = 6600  # batch limit is 2 h per file: longer audio is split into parts of at most this length
 
@@ -113,6 +114,12 @@ class Settings(BaseSettings):
         if name not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
             raise ValueError(f"LOG_LEVEL must be DEBUG, INFO, WARNING, ERROR or CRITICAL (got {v!r})")
         return name
+
+    @field_validator("SARVAM_MODEL", "SARVAM_FALLBACK_MODEL", mode="before")
+    @classmethod
+    def _blank_sarvam_model_is_the_default(cls, v):
+        """`SARVAM_MODEL=` (an empty line in .env) used to send "model": "" to Sarvam; an empty value now means the default model."""
+        return "saaras:v3" if v is None or not str(v).strip() else str(v).strip()
 
     @field_validator("TEXT_VARIANT_MODEL")
     @classmethod

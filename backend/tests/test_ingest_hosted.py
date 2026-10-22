@@ -219,7 +219,7 @@ def test_a_failure_after_job_creation_does_not_create_a_second_job_through_the_w
     the whole ingest. Attempt 2 must continue the SAME job: Sarvam sees exactly one job creation."""
     path = str(world.tmp / "a.mp3")
     out = {"transcript": "x", "language_code": "hi-IN", "timestamps": {
-        "chunks": [s["text"] for s in SEGMENTS], "start_time_seconds": [s["start"] for s in SEGMENTS], "end_time_seconds": [s["end"] for s in SEGMENTS]}}
+        "words": [s["text"] for s in SEGMENTS], "start_time_seconds": [s["start"] for s in SEGMENTS], "end_time_seconds": [s["end"] for s in SEGMENTS]}}
     api = FakeSarvam(output=out)
     api.first_try = True
     api.fail[("POST", "/speech-to-text/job/v1/upload-files")] = lambda body: 503 if api.first_try else 0

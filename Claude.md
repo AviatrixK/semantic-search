@@ -230,6 +230,17 @@ and jump to timestamps. (There is no question-answering / LLM feature: Ask was r
   Not verified against the real services: no Sarvam/Cohere/OpenAI call has been made (mocked HTTP only; ONE Gemini text call was made by
   accident when a test run picked up the dev key from the container, it worked: JSON schema, thinkingLevel and temperature 0 accepted); in particular the
   text APIs' real size limits, whether Sarvam accepts a repeated `upload-files` for a `created` job, and whether Gemini returns usage.
+- **Sarvam output shape (first real run, 2026-10-22).** The batch job MUST be created with `job_parameters.with_timestamps = true` (SDK default
+  false): otherwise the output has `timestamps: null` and ingest fails with `SarvamNoTimestamps` (that was the first real failure, jobs
+  20261022_93a382f8 and _7112abda). Real top-level keys: request_id, transcript, timestamps, diarized_transcript, language_code,
+  language_probability, audio_hash, audio_mime. With the flag the SDK's `TimestampsModel` is `{words, start_time_seconds, end_time_seconds}` where
+  `words` are sentence/phrase segments (the docs page calls the list `chunks`; `parse_output` takes either). NOT yet seen with the flag on a real
+  job: re-check with `python -m app.scripts.sarvam_debug --job-id <id>` (downloads an existing job, creates/uploads nothing, saves
+  `debug/sarvam_<id>.json` without keys or URLs; `debug/` is gitignored) after the first re-upload. Every result logs its keys and segment
+  count at INFO. Upload, download and status calls retry `SARVAM_IO_RETRIES` (3) times with backoff 1,2,4 s inside the client (`_storage`
+  for pre-signed URLs, `_call` for the API); a truncated download counts as a dropped connection. The SDK lists 12 languages as "saaras:v3
+  only" (`languages.V3_ONLY`): with SARVAM_MODEL=saaras:v4 they go to v3 up front (the docs page says v4 has all 22: the sources disagree).
+  Fixture: `tests/fixtures/sarvam_output_without_timestamps.json` (real, text shortened).
 - **Worker threads and search timing.** `WHISPER_THREADS` (default 1, faster-whisper `cpu_threads`) and `TORCH_THREADS` (default 1,
   `torch.set_num_threads` in `worker_process_init`) keep one of the server's 2 CPUs free for the API; raise both on a bigger machine.
   `/api/search` sends `Server-Timing` (log, embed, vector_sql, keyword_sql, hl_lookup, hl_embed, rerank, total; visible in DevTools >

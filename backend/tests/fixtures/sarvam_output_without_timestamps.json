@@ -1,0 +1,32 @@
+{
+  "_note": "REAL output of Sarvam batch job 20261022_93a382f8 (saaras, mode transcribe) created WITHOUT with_timestamps: `timestamps` and `diarized_transcript` are null. Text shortened to the first 160 characters; request_id and audio_hash replaced by placeholders of the same length/shape. Everything else is verbatim.",
+  "job_details": [
+    {
+      "inputs": [
+        {
+          "file_name": "part000.mp3",
+          "file_id": "0"
+        }
+      ],
+      "outputs": [
+        {
+          "file_name": "0.json",
+          "file_id": "0.json"
+        }
+      ],
+      "state": "Success",
+      "error_message": "",
+      "exception_name": null
+    }
+  ],
+  "output": {
+    "request_id": "20261022_00000000-0000-0000-0000-000000000000",
+    "transcript": "Bro, have you heard of this thing called the power of manifestation and all that? Of course. And can you elaborate a little bit on how you've used the power of ...",
+    "timestamps": null,
+    "diarized_transcript": null,
+    "language_code": "en-IN",
+    "language_probability": 0.969,
+    "audio_hash": "00000000000000000000000000000000",
+    "audio_mime": "audio/wav"
+  }
+}

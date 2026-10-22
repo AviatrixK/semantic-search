@@ -43,6 +43,12 @@ def sarvam_code(code: str | None) -> str:
     return code or "unknown"
 
 
+# Languages the SDK (sarvamai 0.1.37, SpeechToTextJobParameters.language_code) lists under "Additional Options (saaras:v3 only)". Sarvam's
+# model page says v4 covers "22 Indic languages", so the two sources disagree; the SDK is the safer reading and v3 costs the same, so with
+# SARVAM_MODEL=saaras:v4 these go to the fallback model up front (the 400/422 retry in SarvamClient.create_job still covers anything else).
+V3_ONLY = frozenset({"as-IN", "ur-IN", "ne-IN", "kok-IN", "ks-IN", "sd-IN", "sa-IN", "sat-IN", "mni-IN", "brx-IN", "mai-IN", "doi-IN"})
+
+
 # ---- Sarvam text APIs (POST /transliterate and POST /translate): the languages each accepts as SOURCE, from
 # https://docs.sarvam.ai/api-reference/text/transliterate-text and .../translate-text (read 2026-10-20).
 TRANSLIT_SOURCES = frozenset({"bn-IN", "gu-IN", "hi-IN", "kn-IN", "ml-IN", "mr-IN", "od-IN", "pa-IN", "ta-IN", "te-IN"})  # + en-IN, auto

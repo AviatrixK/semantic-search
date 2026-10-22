@@ -3,6 +3,8 @@ parameters sent, the upload headers, polling, parsing timestamps, splitting long
 one, saaras:v4 with the v3 fallback, and the text APIs (/transliterate, /translate) that make the romanised and English versions.
 No network, no key."""
 import json
+import logging
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -16,8 +18,12 @@ from app.services.sarvam import (SarvamClient, SarvamJobFailed, SarvamNoTimestam
                                  add_text_variants, parse_output, split_for_limit, text_plan, transcribe_audio)
 from app.services.transcription import NoSpeechError
 
-NATIVE = {"transcript": "नमस्ते दोस्तों आज हम बात करेंगे", "language_code": "hi-IN", "timestamps": {
-    "chunks": ["नमस्ते दोस्तों", "आज हम बात करेंगे"], "start_time_seconds": [0.0, 8.0], "end_time_seconds": [7.5, 19.0]}}
+# Output of a job created WITH timestamps: the top-level keys are the real ones (see tests/fixtures/sarvam_output_without_timestamps.json); the
+# `timestamps` object follows the SDK's TimestampsModel (sarvamai 0.1.37): `words` = sentence/phrase segments, plus start/end seconds.
+NATIVE = {"request_id": "20261022_x", "transcript": "नमस्ते दोस्तों आज हम बात करेंगे", "timestamps": {
+    "words": ["नमस्ते दोस्तों", "आज हम बात करेंगे"], "start_time_seconds": [0.0, 8.0], "end_time_seconds": [7.5, 19.0]},
+    "diarized_transcript": None, "language_code": "hi-IN", "language_probability": 0.97, "audio_hash": "0" * 32, "audio_mime": "audio/wav"}
+REAL = json.loads((Path(__file__).parent / "fixtures" / "sarvam_output_without_timestamps.json").read_text(encoding="utf-8"))
 API = "api.sarvam.ai"
 
 
@@ -41,6 +47,8 @@ class FakeSarvam:
         failure = self.fail.get((request.method, path))
         if failure is not None:
             code = failure(body) if callable(failure) else failure
+            if isinstance(code, Exception):
+                raise code
             if code:
                 return httpx.Response(code)
         if request.method == "POST" and path == "/speech-to-text/job/v1":
@@ -137,7 +145,7 @@ def test_the_batch_flow_sends_the_documented_requests(one_part, audio, tmp_path)
                    ("POST", "/speech-to-text/job/v1/download-files")]
     assert all(k == "sarvam-secret" for m, h, p, k, b in fake.calls if h == API)  # auth header on every API call
     assert all(k is None for m, h, p, k, b in fake.calls if h == "blob.test")  # and NEVER sent to the pre-signed storage URLs
-    assert fake.jobs["job-1"] == {"model": "saaras:v3", "mode": "transcribe", "language_code": "hi-IN"}
+    assert fake.jobs["job-1"] == {"model": "saaras:v3", "mode": "transcribe", "language_code": "hi-IN", "with_timestamps": True}
     assert fake.uploads == [("/in/job-1/part000.mp3", "BlockBlob", "audio/mpeg", 103)]
 
 
@@ -220,7 +228,7 @@ def test_http_errors_are_classified_and_never_leak_the_key(one_part, audio, tmp_
     fake = FakeSarvam(fail={("POST", "/speech-to-text/job/v1"): 503})
     with pytest.raises(SarvamUnavailable):
         run(fake, tmp_path, audio)
-    assert fake.created() == 3  # 1 try + 2 retries
+    assert fake.created() == 4  # 1 try + SARVAM_IO_RETRIES (3) retries
 
 
 def test_a_missing_key_fails_before_any_request(audio, tmp_path):
@@ -357,9 +365,19 @@ def test_languages_v4_does_not_support_go_to_v3_automatically(one_part, audio, t
 def test_a_language_v4_refuses_is_retried_once_on_v3(one_part, audio, tmp_path):
     fake = FakeSarvam(fail={("POST", "/speech-to-text/job/v1"): lambda body: 422 if body["job_parameters"]["model"].endswith("v4") else 0})
     with patch.object(settings, "SARVAM_MODEL", "saaras:v4"):
-        run(fake, tmp_path, audio, language="doi-IN")
+        run(fake, tmp_path, audio, language="hi-IN")  # a language v4 normally takes, but this time the API says no
     assert [c[4]["job_parameters"]["model"] for c in fake.calls if c[2] == "/speech-to-text/job/v1"] == ["saaras:v4", "saaras:v3"]
     assert fake.jobs["job-1"]["model"] == "saaras:v3"
+
+
+def test_the_languages_the_sdk_lists_as_v3_only_never_go_to_v4_even_with_an_empty_setting(one_part, audio, tmp_path):
+    from app.services.languages import V3_ONLY
+    assert len(V3_ONLY) == 12 and "hi-IN" not in V3_ONLY and "en-IN" not in V3_ONLY
+    for code in sorted(V3_ONLY):
+        fake = FakeSarvam()
+        with patch.object(settings, "SARVAM_MODEL", "saaras:v4"), patch.object(settings, "SARVAM_V4_UNSUPPORTED", ""):
+            run(fake, tmp_path, audio, language=code)
+        assert fake.jobs["job-1"]["model"] == "saaras:v3" and fake.created() == 1, code  # decided up front: no failed v4 request first
 
 
 def test_a_rejected_key_is_not_mistaken_for_an_unsupported_language(one_part, audio, tmp_path):
@@ -491,3 +509,209 @@ def test_text_api_responses_without_the_text_are_an_error_not_silence():
         c.translate("x", "hi-IN", "sarvam-translate:v1")
     with pytest.raises(SarvamRejected):
         c.transliterate("x", "hi-IN")
+
+
+# ---------------------------------------------------------------- the real output shape and the timestamps request
+def test_the_job_is_created_with_timestamps_switched_on(one_part, audio, tmp_path):
+    """Without job_parameters.with_timestamps the real API returns `timestamps: null` and ingestion cannot place a single moment."""
+    fake = FakeSarvam()
+    run(fake, tmp_path, audio)
+    creates = [c[4] for c in fake.calls if c[0] == "POST" and c[2] == "/speech-to-text/job/v1"]
+    assert creates == [{"job_parameters": {"model": "saaras:v3", "mode": "transcribe", "language_code": "unknown", "with_timestamps": True}}]
+
+
+def test_the_real_output_of_a_job_made_without_timestamps_is_refused_with_a_message_that_names_the_cause():
+    out = REAL["output"]
+    assert out["timestamps"] is None and out["transcript"] and set(out) == {
+        "request_id", "transcript", "timestamps", "diarized_transcript", "language_code", "language_probability", "audio_hash", "audio_mime"}
+    with pytest.raises(SarvamNoTimestamps) as e:
+        parse_output(out)
+    assert "timestamps is NoneType" in str(e.value) and "with_timestamps" in str(e.value)
+    assert "no timestamps" in e.value.user_message
+
+
+def test_the_whole_flow_on_the_real_output_stops_cleanly_and_logs_what_it_saw(one_part, audio, tmp_path, caplog):
+    fake = FakeSarvam(output=REAL["output"])
+    with caplog.at_level(logging.INFO, logger="app.services.sarvam"), pytest.raises(SarvamNoTimestamps):
+        run(fake, tmp_path, audio)
+    line = next(r.getMessage() for r in caplog.records if "output keys=" in r.getMessage())
+    assert "audio_hash" in line and "'timestamps'" in line and "segments=0" in line and "timestamps=NoneType" in line and "language=en-IN" in line
+
+
+def test_every_result_logs_its_top_level_keys_and_segment_count_at_info(one_part, audio, tmp_path, caplog):
+    with caplog.at_level(logging.INFO, logger="app.services.sarvam"):
+        run(FakeSarvam(), tmp_path, audio)
+    records = [r for r in caplog.records if "output keys=" in r.getMessage()]
+    assert len(records) == 1 and records[0].levelno == logging.INFO
+    msg = records[0].getMessage()
+    assert "job job-1" in msg and "segments=2" in msg and "language=hi-IN" in msg and "timestamps=dict" in msg
+    for key in ("request_id", "transcript", "timestamps", "diarized_transcript", "language_code"):
+        assert f"'{key}'" in msg
+
+
+@pytest.mark.parametrize("name", ["words", "chunks"])
+def test_the_segment_list_may_be_called_words_as_in_the_sdk_or_chunks_as_in_the_docs(name):
+    payload = {"transcript": "a b", "timestamps": {name: ["a", "b"], "start_time_seconds": [0, 5], "end_time_seconds": [4, 9]}}
+    assert parse_output(payload, 10.0) == [{"start": 10.0, "end": 14.0, "text": "a"}, {"start": 15.0, "end": 19.0, "text": "b"}]
+
+
+@pytest.mark.parametrize("timestamps", [None, {}, "x", {"words": ["a"], "start_time_seconds": [0]}, {"words": "a", "start_time_seconds": [0], "end_time_seconds": [1]},
+                                        {"words": ["a", "b"], "start_time_seconds": [0], "end_time_seconds": [1, 2]}])
+def test_unusable_timestamps_with_a_transcript_are_an_error_and_without_one_they_are_silence(timestamps):
+    with pytest.raises(SarvamNoTimestamps):
+        parse_output({"transcript": "words were said", "timestamps": timestamps})
+    assert parse_output({"transcript": "  ", "timestamps": timestamps}) == []
+
+
+# ---------------------------------------------------------------- dropped connections are retried inside the client
+SSL_EOF = httpx.ReadError("[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:2427)")
+
+
+def flaky(times, error=SSL_EOF):
+    """A failure injector: raises `error` for the first `times` calls, then lets the request through."""
+    left = [times]
+
+    def inject(body):
+        if left[0] > 0:
+            left[0] -= 1
+            return error
+        return 0
+    inject.left = left
+    return inject
+
+
+def test_a_dropped_connection_during_the_upload_is_retried_inside_the_client(one_part, audio, tmp_path):
+    inject = flaky(2)
+    fake = FakeSarvam(fail={("PUT", "/in/job-1/part000.mp3"): inject})
+    sleeps = []
+    c = SarvamClient(api_key="sarvam-secret", client=fake.client, sleep=sleeps.append)
+    result = transcribe_audio(audio, str(tmp_path), client=c)
+    assert result.segments and fake.created() == 1 and inject.left[0] == 0  # one job, no task retry needed
+    assert len(fake.uploads) == 1 and sleeps[:2] == [1.0, 2.0]  # exponential backoff between the attempts
+
+
+def test_a_dropped_connection_while_downloading_the_output_is_retried(one_part, audio, tmp_path):
+    inject = flaky(2, httpx.ConnectError("[SSL: UNEXPECTED_EOF_WHILE_READING]"))
+    fake = FakeSarvam(fail={("GET", "/out/job-1/0.json"): inject})
+    result, _ = run(fake, tmp_path, audio)
+    assert result.segments and inject.left[0] == 0
+    downloads = [c for c in fake.calls if c[0] == "GET" and c[1] == "blob.test"]
+    assert len(downloads) == 3 and all(c[3] is None for c in downloads)  # the key is still never sent to the storage URL
+
+
+def test_a_download_cut_short_is_retried_too(one_part, audio, tmp_path):
+    fake = FakeSarvam()
+    real, cut = fake.handle, [1]
+
+    def handler(request):
+        if request.method == "GET" and request.url.host == "blob.test" and cut[0]:
+            cut[0] -= 1
+            return httpx.Response(200, content=b'{"transcript": "tru')  # the connection ended mid-body
+        return real(request)
+
+    fake.client = httpx.Client(transport=httpx.MockTransport(handler))
+    result, _ = run(fake, tmp_path, audio)
+    assert result.segments and cut[0] == 0
+
+
+def test_dropped_connections_on_status_calls_are_retried(one_part, audio, tmp_path):
+    inject = flaky(3)
+    fake = FakeSarvam(fail={("GET", "/speech-to-text/job/v1/job-1/status"): inject})
+    result, _ = run(fake, tmp_path, audio)
+    assert result.segments and inject.left[0] == 0 and fake.created() == 1
+
+
+def test_the_api_calls_job_creation_upload_url_start_and_download_url_are_retried_as_well(one_part, audio, tmp_path):
+    fake = FakeSarvam(fail={("POST", "/speech-to-text/job/v1"): flaky(2), ("POST", "/speech-to-text/job/v1/upload-files"): flaky(1),
+                            ("POST", "/speech-to-text/job/v1/job-1/start"): flaky(2), ("POST", "/speech-to-text/job/v1/download-files"): flaky(2)})
+    result, _ = run(fake, tmp_path, audio)
+    assert result.segments and len(fake.jobs) == 1
+
+
+def test_a_connection_that_stays_down_raises_unavailable_only_after_all_the_retries(one_part, audio, tmp_path):
+    for path, method in (("/in/job-1/part000.mp3", "PUT"), ("/out/job-1/0.json", "GET")):
+        calls = []
+
+        def always(body, calls=calls):
+            calls.append(1)
+            return SSL_EOF
+
+        fake = FakeSarvam(fail={(method, path): always})
+        with pytest.raises(SarvamUnavailable) as e:
+            run(fake, tmp_path, audio)
+        assert len(calls) == 1 + settings.SARVAM_IO_RETRIES  # the first try and SARVAM_IO_RETRIES more
+        assert "blob.test" not in str(e.value) and "sarvam-secret" not in str(e.value)  # no pre-signed URL (a credential) in the error
+
+
+def test_a_refused_storage_request_is_not_retried(one_part, audio, tmp_path):
+    calls = []
+    fake = FakeSarvam(fail={("PUT", "/in/job-1/part000.mp3"): lambda body: calls.append(1) or 403})
+    with pytest.raises(SarvamRejected):
+        run(fake, tmp_path, audio)
+    assert len(calls) == 1
+
+
+def test_a_storage_5xx_is_retried_like_a_dropped_connection(one_part, audio, tmp_path):
+    fake = FakeSarvam(fail={("GET", "/out/job-1/0.json"): flaky(2, 503)})
+    result, _ = run(fake, tmp_path, audio)
+    assert result.segments
+
+
+# ---------------------------------------------------------------- app.scripts.sarvam_debug
+def test_the_debug_script_downloads_an_existing_job_without_creating_or_uploading_anything(tmp_path, capsys):
+    from app.scripts import sarvam_debug
+    fake = FakeSarvam(states=("Completed",), output=REAL["output"])
+    fake.jobs["20261022_93a382f8-cc47"] = {}
+    code = sarvam_debug.main(["--job-id", "20261022_93a382f8-cc47", "--out-dir", str(tmp_path / "debug")], client=client_for(fake))
+    assert code == 0
+    assert fake.created() == 0 and fake.uploads == [] and fake.starts == []  # no new job, no upload, no start
+    ops = {(c[0], c[2]) for c in fake.calls if c[1] == API}
+    assert ops == {("GET", "/speech-to-text/job/v1/20261022_93a382f8-cc47/status"), ("POST", "/speech-to-text/job/v1/download-files")}
+    saved = json.loads((tmp_path / "debug" / "sarvam_20261022_93a382f8-cc47.json").read_text(encoding="utf-8"))
+    assert saved["outputs"]["0.json"] == REAL["output"] and saved["job_state"] == "Completed"
+    out = capsys.readouterr().out
+    assert "top-level keys: ['request_id', 'transcript', 'timestamps'" in out and "timing-looking paths: ['timestamps']" in out
+
+
+def test_the_debug_file_holds_no_key_no_header_and_no_presigned_url(tmp_path):
+    from app.scripts import sarvam_debug
+    fake = FakeSarvam(states=("Completed",))
+    fake.jobs["job-9"] = {}
+    sarvam_debug.main(["--job-id", "job-9", "--out-dir", str(tmp_path)], client=client_for(fake, api_key="sarvam-secret"))
+    text = (tmp_path / "sarvam_job-9.json").read_text(encoding="utf-8")
+    for forbidden in ("sarvam-secret", "api-subscription-key", "blob.test", "https://", "file_url", "authorization"):
+        assert forbidden.lower() not in text.lower(), forbidden
+
+
+def test_the_debug_script_finds_the_timestamps_wherever_they_are_and_reports_none_when_absent():
+    from app.scripts.sarvam_debug import describe, find_timestamp_paths
+    assert find_timestamp_paths(NATIVE) == ["timestamps", "timestamps.start_time_seconds", "timestamps.end_time_seconds"]
+    nested = {"result": {"segments": [{"text": "a", "start": 0, "end": 1}]}}
+    assert find_timestamp_paths(nested) == ["result.segments[].start", "result.segments[].end"]
+    assert find_timestamp_paths({"transcript": "x", "language_code": "hi-IN"}) == []
+    assert "list[2] of str(" in describe(NATIVE)
+
+
+def test_the_debug_script_refuses_odd_job_ids_and_reports_sarvam_errors(tmp_path, capsys):
+    from app.scripts import sarvam_debug
+    with pytest.raises(SystemExit):
+        sarvam_debug.main(["--job-id", "../etc/passwd"], client=client_for(FakeSarvam()))
+    code = sarvam_debug.main(["--job-id", "missing-job", "--out-dir", str(tmp_path)], client=client_for(FakeSarvam()))  # the API answers 404
+    assert code == 1 and "Sarvam call failed" in capsys.readouterr().out and not list(tmp_path.iterdir())
+
+
+def test_debug_output_is_gitignored():
+    root = Path(__file__).resolve().parents[2]
+    ignore = root / ".gitignore"
+    if not ignore.exists():
+        pytest.skip(".gitignore is not part of this container")
+    assert "debug/" in ignore.read_text(encoding="utf-8").splitlines()
+
+
+def test_an_empty_model_setting_means_the_default_model_not_an_empty_model_in_the_request():
+    """.env had `SARVAM_MODEL=` (blank), so the first real jobs were created with "model": ""."""
+    from app.core.config import Settings
+    for blank in ("", "  "):
+        s = Settings(SARVAM_MODEL=blank, SARVAM_FALLBACK_MODEL=blank, _env_file=None)
+        assert (s.SARVAM_MODEL, s.SARVAM_FALLBACK_MODEL) == ("saaras:v3", "saaras:v3")
+    assert Settings(SARVAM_MODEL=" saaras:v4 ", _env_file=None).SARVAM_MODEL == "saaras:v4"

@@ -13,3 +13,6 @@ BuildPhase.md
 !.env.prod.example
 backups/
 docs/
+
+# raw provider outputs saved by app.scripts.sarvam_debug
+debug/

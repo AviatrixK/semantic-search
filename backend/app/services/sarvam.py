@@ -3,7 +3,7 @@
 Why batch: the real-time REST endpoint takes at most 30 seconds of audio per request; batch takes up to 2 hours per file.
 Flow (verified against the official SDK source, sarvamai 0.1.37, and docs.sarvam.ai/api/api-guides-tutorials/speech-to-text/batch-api):
 
-  POST /speech-to-text/job/v1                 {"job_parameters": {"model", "mode": "transcribe", "language_code"}}  -> job_id
+  POST /speech-to-text/job/v1                 {"job_parameters": {"model", "mode", "language_code", "with_timestamps": true}}  -> job_id
   POST /speech-to-text/job/v1/upload-files    {"job_id", "files": [names]}  -> upload_urls[name].file_url   (then PUT each file there,
                                               header x-ms-blob-type: BlockBlob)
   POST /speech-to-text/job/v1/{job_id}/start
@@ -11,8 +11,12 @@ Flow (verified against the official SDK source, sarvamai 0.1.37, and docs.sarvam
   POST /speech-to-text/job/v1/download-files  {"job_id", "files": [output names]} -> download_urls[name].file_url   (then GET each)
   header on every call to api.sarvam.ai: api-subscription-key
 
-Each output file is JSON: {"transcript", "language_code", "timestamps": {"chunks": [...], "start_time_seconds": [...],
-"end_time_seconds": [...]}}: sentence/phrase-level timestamps (word-level ones do not exist).
+Each output file is JSON. REAL keys, seen on job 20261022_93a382f8 (2026-10-22): request_id, transcript, timestamps, diarized_transcript,
+language_code, language_probability, audio_hash, audio_mime. `timestamps` is NULL unless the job was created with
+job_parameters.with_timestamps = true (default false, sarvamai 0.1.37 SpeechToTextJobParameters): that omission was why the first real run
+failed with SarvamNoTimestamps. With the flag, the SDK's TimestampsModel says: {"words": [...], "start_time_seconds": [...],
+"end_time_seconds": [...]} where `words` holds sentence/phrase segments ("Not individual words"); Sarvam's batch docs page spells the same list
+`chunks`, so parse_output accepts either name.
 
 The transcript is fetched once, in the speaker's own script (mode "transcribe", billed for the audio once). The Latin-script and
 English versions of each chunk are made from the NATIVE chunk text with the text APIs (docs read 2026-10-20):
@@ -88,18 +92,25 @@ class TranscriptResult:
 
 
 # ---- pure helpers
+TEXT_KEYS = ("words", "chunks")  # the segment strings: the SDK model calls them `words`, the docs page `chunks`
+
+
 def parse_output(payload: dict, offset: float = 0.0) -> list[dict]:
     """Segments [{start, end, text}] from one output file. Empty list for silence. SarvamNoTimestamps if there is text but the
-    timestamp arrays are missing or inconsistent."""
-    ts = payload.get("timestamps") or {}
-    chunks, starts, ends = ts.get("chunks"), ts.get("start_time_seconds"), ts.get("end_time_seconds")
-    ok = isinstance(chunks, list) and isinstance(starts, list) and isinstance(ends, list) and len(chunks) == len(starts) == len(ends)
+    timestamps are missing (null: the job was created without with_timestamps) or inconsistent."""
+    ts = payload.get("timestamps")
+    ts = ts if isinstance(ts, dict) else {}
+    texts = next((ts[k] for k in TEXT_KEYS if isinstance(ts.get(k), list)), None)
+    starts, ends = ts.get("start_time_seconds"), ts.get("end_time_seconds")
+    ok = isinstance(texts, list) and isinstance(starts, list) and isinstance(ends, list) and len(texts) == len(starts) == len(ends)
     if not ok:
         if (payload.get("transcript") or "").strip():
-            raise SarvamNoTimestamps("output has a transcript but no usable timestamps.chunks/start_time_seconds/end_time_seconds")
+            raise SarvamNoTimestamps(
+                f"output has a transcript but no usable timestamps (timestamps is {type(payload.get('timestamps')).__name__}, "
+                f"keys {sorted(ts)}; expected words|chunks + start_time_seconds + end_time_seconds; job needs with_timestamps=true)")
         return []
     return [{"start": float(s) + offset, "end": float(e) + offset, "text": str(c).strip()}
-            for c, s, e in zip(chunks, starts, ends) if str(c).strip()]
+            for c, s, e in zip(texts, starts, ends) if str(c).strip()]
 
 
 def split_for_limit(text: str, limit: int) -> list[str]:
@@ -124,7 +135,8 @@ def split_for_limit(text: str, limit: int) -> list[str]:
 
 
 def v4_supported(language_code: str) -> bool:
-    return language_code not in settings.sarvam_v4_unsupported
+    """False for the languages the SDK lists as "saaras:v3 only" (languages.V3_ONLY) and any in SARVAM_V4_UNSUPPORTED."""
+    return language_code not in languages.V3_ONLY and language_code not in settings.sarvam_v4_unsupported
 
 
 def text_plan(language: str | None) -> dict:
@@ -161,7 +173,8 @@ class SarvamClient:
             self._client = httpx.Client()
         return self._client
 
-    def _call(self, method: str, path: str, *, json: dict | None = None, retries: int = 2, timeout: float = 60) -> dict:
+    def _call(self, method: str, path: str, *, json: dict | None = None, retries: int | None = None, timeout: float = 60) -> dict:
+        retries = settings.SARVAM_IO_RETRIES if retries is None else retries
         if not self.api_key:
             raise SarvamNotConfigured("SARVAM_API_KEY is empty")
         last: Exception | None = None
@@ -181,6 +194,36 @@ class SarvamClient:
             if attempt < retries:
                 self._sleep(min(10.0, 1.0 * 2 ** attempt))
         raise SarvamUnavailable(f"{method} {path}: {type(last).__name__}") from last
+
+    def _storage(self, method: str, url: str, what: str, *, content: bytes | None = None, timeout: float = 120,
+                 headers: dict | None = None, parse: bool = False):
+        """One request to a pre-signed storage URL (no API key is ever sent there). A dropped connection ("SSL: UNEXPECTED_EOF_WHILE_READING"),
+        a timeout, a 429/5xx, or a download cut short (unparseable JSON) is retried SARVAM_IO_RETRIES times with backoff 1, 2, 4 s BEFORE
+        an error is raised, so one flaky connection does not use up a whole task retry. Other 4xx raise SarvamRejected at once.
+        Returns the parsed JSON when parse=True, else the response. The URL (a credential) never appears in messages or logs."""
+        retries = settings.SARVAM_IO_RETRIES
+        last = "no attempt"
+        for attempt in range(retries + 1):
+            try:
+                r = self._http().request(method, url, content=content, timeout=timeout, headers=headers)
+            except (httpx.TimeoutException, httpx.TransportError) as exc:
+                last = type(exc).__name__
+            else:
+                if r.status_code < 400:
+                    if not parse:
+                        return r
+                    try:
+                        return r.json()
+                    except ValueError:
+                        last = "unreadable JSON (cut short?)"
+                elif r.status_code == 429 or r.status_code >= 500:
+                    last = f"HTTP {r.status_code}"
+                else:
+                    raise SarvamRejected(f"{what} answered {r.status_code}", r.status_code)
+            log.warning("sarvam: %s failed (%s), attempt %d/%d", what, last, attempt + 1, retries + 1)
+            if attempt < retries:
+                self._sleep(min(10.0, 1.0 * 2 ** attempt))
+        raise SarvamUnavailable(f"{what}: {last}")
 
     # -- speech to text (batch)
     def create_job(self, language_code: str) -> tuple[str, str]:
@@ -202,7 +245,8 @@ class SarvamClient:
 
     def _create(self, model: str, language_code: str) -> str:
         data = self._call("POST", "speech-to-text/job/v1",
-                          json={"job_parameters": {"model": model, "mode": "transcribe", "language_code": language_code}})
+                          json={"job_parameters": {"model": model, "mode": "transcribe", "language_code": language_code,
+                                                    "with_timestamps": True}})  # without this `timestamps` comes back null
         try:
             return data["job_id"]
         except (KeyError, TypeError) as exc:
@@ -218,14 +262,9 @@ class SarvamClient:
             except (KeyError, TypeError) as exc:
                 raise SarvamRejected(f"no upload URL for {name}") from exc
             with open(path, "rb") as f:
-                try:
-                    r = self._http().put(url, content=f.read(), timeout=600,
-                                         headers={"x-ms-blob-type": "BlockBlob", "Content-Type": "audio/mpeg"})
-                except (httpx.TimeoutException, httpx.TransportError) as exc:
-                    raise SarvamUnavailable(f"upload of {name}: {type(exc).__name__}") from exc
-            if r.status_code >= 400:
-                raise SarvamUnavailable(f"upload of {name} answered {r.status_code}") if r.status_code >= 500 else SarvamRejected(
-                    f"upload of {name} answered {r.status_code}", r.status_code)
+                body = f.read()
+            self._storage("PUT", url, f"upload of {name}", content=body, timeout=600,
+                          headers={"x-ms-blob-type": "BlockBlob", "Content-Type": "audio/mpeg"})
 
     def start(self, job_id: str) -> None:
         self._call("POST", f"speech-to-text/job/v1/{job_id}/start")
@@ -265,22 +304,22 @@ class SarvamClient:
         missing = [n for n in input_names if n not in out_for]
         if missing:
             raise SarvamJobFailed(f"no output for {missing}")
-        data = self._call("POST", "speech-to-text/job/v1/download-files", json={"job_id": job_id, "files": [out_for[n] for n in input_names]})
+        got = self.download_outputs(job_id, [out_for[n] for n in input_names])
+        return [got[out_for[n]] for n in input_names]
+
+    def download_outputs(self, job_id: str, output_names: list[str]) -> dict[str, object]:
+        """{output file name: parsed JSON} for files of an existing job. The pre-signed URLs are used and dropped, never logged or kept."""
+        data = self._call("POST", "speech-to-text/job/v1/download-files", json={"job_id": job_id, "files": output_names})
         urls = data.get("download_urls") or {}
-        payloads = []
-        for n in input_names:
+        out: dict[str, object] = {}
+        for name in output_names:
             try:
-                url = urls[out_for[n]]["file_url"]
+                url = urls[name]["file_url"]
             except (KeyError, TypeError) as exc:
-                raise SarvamRejected(f"no download URL for {out_for[n]}") from exc
-            try:
-                r = self._http().get(url, timeout=120)
-            except (httpx.TimeoutException, httpx.TransportError) as exc:
-                raise SarvamUnavailable(f"download of {out_for[n]}: {type(exc).__name__}") from exc
-            if r.status_code >= 400:
-                raise SarvamUnavailable(f"download answered {r.status_code}")
-            payloads.append(r.json())
-        return payloads
+                raise SarvamRejected(f"no download URL for {name}") from exc
+            r = self._storage("GET", url, f"download of {name}", timeout=120, parse=True)
+            out[name] = r
+        return out
 
     # -- text APIs (billed per character of input)
     def transliterate(self, text: str, source: str) -> str:
@@ -367,7 +406,15 @@ def transcribe_audio(audio_path: str, tmp_dir: str, *, language: str | None = No
     segments: list[dict] = []
     detected = None
     for payload, (_, offset) in zip(payloads, parts):
-        segments += parse_output(payload, offset)
+        found: list[dict] = []
+        try:
+            found = parse_output(payload, offset)
+        finally:  # logged even when parsing raises: the keys are exactly what is needed to debug it
+            log.info("sarvam: job %s output keys=%s segments=%d language=%s timestamps=%s", job,
+                     sorted(payload) if isinstance(payload, dict) else type(payload).__name__, len(found),
+                     payload.get("language_code") if isinstance(payload, dict) else None,
+                     type(payload.get("timestamps")).__name__ if isinstance(payload, dict) else None)
+        segments += found
         detected = detected or payload.get("language_code")
     report(total, total)
     if not segments:
