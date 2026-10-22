@@ -12,8 +12,8 @@ from app.core.db import SessionLocal
 from app.core.config import settings
 from app.core.db import engine
 from app.models import Chunk, Job, Video
-from app.services import (chunking, embedders, embedding, jobevents, languages, media, sarvam, sentences, storage, tokens,
-                          transcription, vectorstore)
+from app.services import (chunking, embedders, embedding, jobevents, languages, media, sarvam, sentences, storage, textvariants,
+                          tokens, transcription, vectorstore)
 from app.workers.celery_app import celery
 
 log = get_task_logger(__name__)
@@ -34,7 +34,8 @@ def _set(db, job_id, stage, progress, error=None):
 
 # Failures with a short user-facing message of their own that retrying cannot fix: bad media, silence, a bad API key, no credits.
 # (SarvamUnavailable and EmbeddingUnavailable are subclasses too, but is_transient() sends those to the retry path first.)
-KNOWN_PERMANENT = (media.MediaError, transcription.NoSpeechError, sarvam.SarvamError, embedders.EmbeddingError)
+KNOWN_PERMANENT = (media.MediaError, transcription.NoSpeechError, sarvam.SarvamError, embedders.EmbeddingError,
+                   textvariants.TextVariantError)
 
 
 def is_transient(exc: BaseException) -> bool:
@@ -136,6 +137,26 @@ def _transcribe(db, video, src: str, tmp: str, job_id: str, engine_name: str):
     return segments, lang, 0.0
 
 
+def _record_enrichment(video, e) -> None:
+    """Who made the English/romanised text of this video, how it went, and what it cost in tokens (None = not applicable)."""
+    video.text_variants_provider = e.provider if e and e.status else None
+    video.text_variants_model = e.model if e and e.status else None
+    video.text_variants_status = e.status if e else None
+    usage = e.usage if e else None
+    video.text_variants_in_tokens = usage.input if usage else None
+    video.text_variants_out_tokens = usage.output if usage else None
+    video.text_variants_est_tokens = usage.estimated if usage else None
+
+
+def _describe(e) -> str:
+    if e is None or not e.status:
+        return "none"
+    if e.usage:
+        return (f"{e.provider}/{e.model} status={e.status} pending={e.pending} requests={e.usage.requests} in_tokens={e.usage.input} "
+                f"out_tokens={e.usage.output} estimated_tokens={e.usage.estimated}")
+    return f"{e.provider}/{e.model} status={e.status} chars={e.chars}"
+
+
 def _ingest(db, video_id, job_id, transcriber: str | None = None, embed_provider: str | None = None):
     video = db.get(Video, uuid.UUID(video_id))
     if video is None:  # deleted while queued
@@ -144,6 +165,8 @@ def _ingest(db, video_id, job_id, transcriber: str | None = None, embed_provider
     engine_name = transcriber or settings.TRANSCRIBER
     embedder = embedders.get_embedder(embed_provider)
     embedder.check_configured()  # a missing API key should fail the job NOW, not after minutes of transcription
+    if engine_name == "sarvam":
+        textvariants.check_configured()
     with tempfile.TemporaryDirectory() as tmp:
         src = os.path.join(tmp, os.path.basename(video.storage_key))
         storage.download_to(video.storage_key, src)
@@ -159,9 +182,12 @@ def _ingest(db, video_id, job_id, transcriber: str | None = None, embed_provider
     spans = chunking.window(segments)
     if not spans:
         raise transcription.NoSpeechError("no chunks produced from transcript")
-    text_chars = {}
-    if engine_name == "sarvam":  # roman / English versions of each chunk, made from its native text by Sarvam's text APIs
-        text_chars = sarvam.add_text_variants(spans, lang)["chars"]
+    enrichment = None
+    if engine_name == "sarvam":
+        # English and romanised text of each chunk, from its native text: Gemini Flash-Lite (default) or Sarvam's text APIs. A Gemini
+        # outage does not fail the video: the chunks keep their native text and the video is marked "pending" (see textvariants.py).
+        enrichment = textvariants.enrich_spans(spans, lang)
+    _record_enrichment(video, enrichment)
     chunks = [Chunk(id=uuid.uuid4(), video_id=video.id, idx=i, start_sec=s.start, end_sec=s.end, text=s.text, text_native=s.text,
                     text_roman=s.text_roman, text_en=s.text_en) for i, s in enumerate(spans)]
     sentence_rows, vector_rows = [], []
@@ -187,8 +213,8 @@ def _ingest(db, video_id, job_id, transcriber: str | None = None, embed_provider
     video.status = "ready"
     if video.sarvam_job_id and video.sarvam_job_status != "failed":
         video.sarvam_job_status = sarvam.CONSUMED  # its transcript is in the chunks: a later reprocess must start a new job
-    log.info("job %s: done transcriber=%s embedder=%s chunks=%d billed_audio_s=%.0f text_api_chars=%s embed_tokens=%d (estimated %d)",
-             job_id, engine_name, embedder.key, len(chunks), billed, text_chars or 0, getattr(embedder, "tokens_used", 0),
+    log.info("job %s: done transcriber=%s embedder=%s chunks=%d billed_audio_s=%.0f text_variants=%s embed_tokens=%d (estimated %d)",
+             job_id, engine_name, embedder.key, len(chunks), billed, _describe(enrichment), getattr(embedder, "tokens_used", 0),
              getattr(embedder, "tokens_estimated", 0))
     _set(db, job_id, "done", 100)
 

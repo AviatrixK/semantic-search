@@ -9,7 +9,8 @@ import pytest
 from app.core.config import settings
 from app.models import Chunk, ChunkEmbedding, Job, Video
 from app.scripts import reprocess
-from app.services import jobevents, pricing, vectorstore
+from app.services import jobevents, pricing, textvariants, vectorstore
+from tests.test_textvariants import FakeGemini, hindi
 from app.services.embedders import EmbeddingUnavailable, GeminiEmbedder
 
 
@@ -67,6 +68,7 @@ def vectors(db, emb):
 
 
 # ---------------------------------------------------------------- plan and dry run
+@patch.object(settings, "TEXT_VARIANT_PROVIDER", "sarvam")
 def test_dry_run_prints_the_plan_and_estimate_and_changes_nothing(lib, capsys):
     a, b = add_video(lib, "alpha"), add_video(lib, "beta", transcriber="sarvam")
     emb = FakeHosted()
@@ -251,6 +253,7 @@ def test_the_local_provider_fills_missing_local_vectors_without_asking(lib):
     asked.assert_not_called()  # free: no confirmation
 
 
+@patch.object(settings, "TEXT_VARIANT_PROVIDER", "sarvam")
 def test_estimates_use_the_price_table_and_say_when_a_price_is_unknown(lib):
     emb = FakeHosted()
     plans = [reprocess.Plan(uuid.uuid4(), "x", "embed", texts=10, tokens=2_000_000), reprocess.Plan(uuid.uuid4(), "y", "transcribe", audio_seconds=7200)]
@@ -260,3 +263,101 @@ def test_estimates_use_the_price_table_and_say_when_a_price_is_unknown(lib):
     known = GeminiEmbedder(model="gemini-embedding-2", dim=8, api_key="k")
     assert reprocess.estimate(plans, "whisper", known)["embed_usd"] == pytest.approx(2.0 * pricing.EMBEDDING_PRICES["gemini/gemini-embedding-2"].usd_per_million_tokens)
     assert reprocess.estimate(plans, "whisper", known)["sarvam_inr"] == 0
+
+
+# ---------------------------------------------------------------- text variants: cost per provider, the "text" action
+def test_the_dry_run_shows_the_cost_per_hour_of_video_for_every_text_provider_and_marks_the_current_one(lib, capsys):
+    add_video(lib, "alpha")
+    with patch.object(settings, "TEXT_VARIANT_PROVIDER", "gemini"), patch.object(settings, "TEXT_VARIANT_MODEL", "gemini-3.1-flash-lite"):
+        code, _ = run(["--dry-run", "--transcriber", "sarvam", "--inr-per-usd", "88"], embedder=FakeHosted())
+    out = capsys.readouterr().out
+    assert code == 0 and "text_en / text_roman cost per hour of video:" in out
+    line = {p: next(l for l in out.splitlines() if f"TEXT_VARIANT_PROVIDER={p}" in l) for p in ("gemini", "sarvam", "none")}
+    assert "(current)" in line["gemini"] and "(current)" not in line["sarvam"] and "(current)" not in line["none"]
+    assert "$0.093 (about INR 8.2)" in line["gemini"] and "ESTIMATED" in line["gemini"] and "https://ai.google.dev/gemini-api/docs/pricing" in line["gemini"]
+    assert "INR 312" in line["sarvam"] and "free" in line["none"]
+    assert "to translate/romanise now (gemini-3.1-flash-lite)" in out  # 0.5 h of audio to transcribe: its Gemini cost is in the plan too
+
+
+def test_the_dry_run_without_an_exchange_rate_does_not_invent_inr_for_gemini(lib, capsys):
+    add_video(lib, "alpha")
+    with patch.object(settings, "TEXT_VARIANT_PROVIDER", "gemini"):
+        run(["--dry-run", "--transcriber", "sarvam"], embedder=FakeHosted())
+    gem = next(l for l in capsys.readouterr().out.splitlines() if "TEXT_VARIANT_PROVIDER=gemini" in l)
+    assert "$0.093" in gem and "INR" not in gem.split("per hour of video:")[1].split(",")[0]
+
+
+def test_estimate_with_gemini_counts_stt_in_inr_and_the_text_in_tokens(lib):
+    plans = [reprocess.Plan(uuid.uuid4(), "y", "transcribe", audio_seconds=7200)]
+    with patch.object(settings, "TEXT_VARIANT_PROVIDER", "gemini"), patch.object(settings, "TEXT_VARIANT_MODEL", "gemini-3.1-flash-lite"):
+        est = reprocess.estimate(plans, "sarvam", FakeHosted())
+    assert est["sarvam_inr"] == pytest.approx(60.0)  # 2 h x INR 30: the text is NOT charged in INR any more
+    assert (est["text_tokens_in"], est["text_tokens_out"]) == (72_200, 111_540) and est["text_price_known"]
+    assert est["text_usd"] == pytest.approx(2 * 0.0927, abs=1e-3)
+    with patch.object(settings, "TEXT_VARIANT_PROVIDER", "gemini"), patch.object(settings, "TEXT_VARIANT_MODEL", "gemini-9-imaginary"):
+        assert reprocess.estimate(plans, "sarvam", FakeHosted())["text_price_known"] is False  # an unknown model has no invented price
+    with patch.object(settings, "TEXT_VARIANT_PROVIDER", "none"):
+        none = reprocess.estimate(plans, "sarvam", FakeHosted())
+    assert none["sarvam_inr"] == pytest.approx(60.0) and none["text_tokens_in"] == 0 and none["text_usd"] == 0.0
+
+
+def add_pending_video(db, title="pending", n=4, status="pending"):
+    v = Video(id=uuid.uuid4(), title=title, storage_key=f"raw/{title}.mp4", transcriber="sarvam", duration_sec=1800, status="ready",
+              language="hi-IN", text_variants_status=status)
+    db.add(v)
+    db.flush()
+    for i, t in enumerate(hindi(n)):
+        db.add(Chunk(id=uuid.uuid4(), video_id=v.id, idx=i, start_sec=i * 30.0, end_sec=i * 30.0 + 30, text=t, text_native=t))
+    db.commit()
+    return v
+
+
+@pytest.fixture
+def gemini(lib):
+    fake = FakeGemini()
+    with patch.object(settings, "TEXT_VARIANT_PROVIDER", "gemini"), patch.object(textvariants, "GeminiTextClient", lambda: fake.client()):
+        yield fake
+
+
+def test_a_pending_video_gets_a_text_action_and_a_complete_one_does_not(lib, gemini):
+    pending, complete = add_pending_video(lib, "p"), add_pending_video(lib, "c", status="complete")
+    for chunk in lib.query(Chunk).filter_by(video_id=complete.id):
+        chunk.text_en, chunk.text_roman = "e", "r"
+    lib.commit()
+    emb = FakeHosted()
+    plan_p = reprocess.make_plan(lib, pending, transcriber=None, embedder=emb, busy=set())
+    assert (plan_p.action, plan_p.text_chunks) == ("text", 4) and plan_p.text_chars > 100 and "4 chunk(s) without" in plan_p.detail
+    assert reprocess.make_plan(lib, complete, transcriber=None, embedder=emb, busy=set()).action == "embed"  # only vectors are missing
+    with patch.object(settings, "TEXT_VARIANT_PROVIDER", "sarvam"):  # the Gemini fill is not for another provider's videos
+        assert reprocess.make_plan(lib, pending, transcriber=None, embedder=emb, busy=set()).action == "embed"
+
+
+def test_reprocess_fills_only_the_missing_variants_then_the_vectors_and_asks_before_spending(lib, gemini, capsys):
+    v = add_pending_video(lib)
+    emb = FakeHosted()
+    code, _ = run(["--video-ids", str(v.id)], embedder=emb, answer="n")
+    assert code == 1 and gemini.requests == [] and "Cancelled" in capsys.readouterr().out  # paid work needs a yes
+    code, _ = run(["--video-ids", str(v.id)], embedder=emb)
+    out = capsys.readouterr().out
+    assert code == 0 and gemini.sizes == [4] and "text variants made for 4 chunk(s) (100 in / 57 out tokens)" in out
+    lib.expire_all()
+    video = lib.get(Video, v.id)
+    assert video.text_variants_status == "complete" and (video.text_variants_in_tokens, video.text_variants_out_tokens) == (100, 57)
+    assert vectors(lib, emb) == 8  # 4 chunks x (native + the English text that now exists)
+    code, _ = run(["--video-ids", str(v.id)], embedder=emb)  # again: nothing is missing, nothing is sent
+    assert code == 0 and gemini.sizes == [4] and "Nothing to do" in capsys.readouterr().out.splitlines()[-1]
+
+
+def test_if_the_service_is_still_down_the_chunks_stay_pending_and_the_next_run_retries_only_them(lib, gemini, capsys):
+    v = add_pending_video(lib)
+    gemini.script[:] = [503] * 5
+    emb = FakeHosted()
+    code, _ = run(["--video-ids", str(v.id)], embedder=emb)
+    assert "4 still pending (run again)" in capsys.readouterr().out
+    lib.expire_all()
+    assert lib.get(Video, v.id).text_variants_status == "pending" and vectors(lib, emb) == 4  # native vectors only
+    gemini.requests.clear()
+    run(["--video-ids", str(v.id)], embedder=emb)
+    assert gemini.sizes == [4]
+    lib.expire_all()
+    assert lib.get(Video, v.id).text_variants_status == "complete" and vectors(lib, emb) == 8

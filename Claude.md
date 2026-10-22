@@ -180,7 +180,7 @@ and jump to timestamps. (There is no question-answering / LLM feature: Ask was r
   REST flow copied from the official SDK source) returns sentence-level timestamps. **ONE speech-to-text job per video** (mode `transcribe`,
   native script, INR 30/h); `text_roman` / `text_en` of each CHUNK are made from its native text by Sarvam's text APIs (`POST /transliterate`
   and `POST /translate`, target en-IN, INR 20 per 10K characters each, `sarvam.add_text_variants`; `SARVAM_TEXT_VARIANTS` = `roman,en` picks
-  which; `SARVAM_TRANSLATE_MODEL` sarvam-translate:v1 = 23 languages / 2000 chars per request, mayura:v1 = 11 / 1000; /transliterate has 11
+  which, only when `TEXT_VARIANT_PROVIDER=sarvam`; `SARVAM_TRANSLATE_MODEL` sarvam-translate:v1 = 23 languages / 2000 chars per request, mayura:v1 = 11 / 1000; /transliterate has 11
   languages and no documented size limit, so `SARVAM_TRANSLIT_MAX_CHARS`=1000; texts over a limit are split at sentence ends; en-IN speech
   needs no calls; a 422 on one text leaves that value empty). The old three-audio-jobs-aligned-by-time design (`align_text`) is GONE. Cost:
   about INR 342 per hour of video (30 + 2 x 78,000 chars/h x 20/10K; the 78,000 is measured on the dev library and includes the 5 s chunk
@@ -188,7 +188,7 @@ and jump to timestamps. (There is no question-answering / LLM feature: Ask was r
   and after each step (created, uploaded, started, then Sarvam's states, finally `consumed` when the chunks are stored or the failure is
   permanent); a Celery retry hands them back to `transcribe_audio`, which resumes the same job (re-upload only if `created`, start only if
   Sarvam still says `accepted`, else just poll/download) and starts a new one only if the saved job `failed`, is unknown (404), or is
-  `consumed`. Text-API calls are NOT resumable: a retry after the transcript step pays for them again. **Models:** `SARVAM_MODEL=saaras:v4`
+  `consumed`. Sarvam text-API calls are NOT resumable: a retry after the transcript step pays for them again. **Models:** `SARVAM_MODEL=saaras:v4`
   works; languages in `SARVAM_V4_UNSUPPORTED` (empty: the docs list the same 23 languages for v4 and v3) and any job request v4 answers
   with 400/422 are retried on `SARVAM_FALLBACK_MODEL` (v3). Audio over `SARVAM_MAX_FILE_SEC` (batch limit 2 h) is split and offset within
   the same job. Chunks store
@@ -199,6 +199,20 @@ and jump to timestamps. (There is no question-answering / LLM feature: Ask was r
   per `provider/model@dims`, `services/vectorstore.py`; search takes the better of native/en per chunk); `chunks.embedding vector(384)` is the
   LOCAL model's and is nullable. `EMBED_DIMENSIONS` default 1536 (HNSW max 2000, verified). **Resilience:** query embedding 2 s timeout + 1
   retry, failure -> keyword-only search (WARNING log, `X-Search-Fallback: keyword-only`), cache key = provider+model+dims+query, 7 days.
+  **Text variants provider (Round 8, `services/textvariants.py`).** `TEXT_VARIANT_PROVIDER=gemini|sarvam|none` (default gemini) decides who makes
+  `text_en` / `text_roman` after Sarvam's single STT job, only when TRANSCRIBER=sarvam and only in the worker. gemini = `TEXT_VARIANT_MODEL`
+  (pinned, an alias containing "latest" is refused; default `gemini-3.1-flash-lite`, $0.25/$1.50 per 1M tokens, https://ai.google.dev/gemini-api/docs/pricing),
+  `generateContent` with `responseMimeType` JSON + `responseSchema`, temperature 0 (Google advises 1.0 for Gemini 3; answers are validated so it
+  is safe), `thinkingConfig.thinkingLevel=minimal`; 15 chunks / 6000 chars per request; validation = same ids and count, no empty field, roman in
+  Latin letters (diacritics stripped); wrong answer -> asked again once -> one chunk per request -> that chunk stays pending. Chunks in Latin
+  letters are never sent (text_en = copy, text_roman empty). 429/5xx/timeouts back off 1,2,4,8 s; two dead batches in a row stop the run; a
+  4xx stops it at once. A service problem NEVER fails the video: it finishes with native text and `videos.text_variants_status='pending'`;
+  `reprocess` (action `text`) calls `fill_video`, which sends only chunks still lacking a variant, then embeds the vectors that waited for them.
+  Tokens: `videos.text_variants_in_tokens/_out_tokens` (output includes thinking) are the reply's real counts, `_est_tokens` what had to be
+  guessed. The cost per hour (~$0.093 for the default, i.e. ~INR 8 at INR 88/USD, on top of INR 30 for STT) is an ESTIMATE from assumed
+  tokens-per-character in `pricing.py`: replace it with the recorded tokens once real videos exist. Privacy: transcripts go to Google when
+  gemini is used (README says so). Migration `db/migrations/2026-10-22-text-variants.sql`. **Tests never use the network or real keys**
+  (conftest blanks every API key, sets the provider to none and makes `httpx.HTTPTransport` refuse real calls; opt in with a mocked transport).
   Hosted providers get LEXICAL highlights (`best_lexical_index`), no sentence vectors. **Keyword search = TWO indexes** in one query (`retrieval._keyword_candidates`
   ORs them, rank = the two `ts_rank_cd` added, so a chunk found by both ranks higher; still ONE keyword list in the RRF merge): `chunks.tsv`
   = `'simple'` over native + romanised text, `chunks.tsv_en` = `'english'` (stemming) over `coalesce(text_en, text)` (Whisper English videos
@@ -213,7 +227,8 @@ and jump to timestamps. (There is no question-answering / LLM feature: Ask was r
   [--embed-provider] [--dry-run] [--yes]` (resumable from DB state, asks before paid work), `eval/run_provider_eval.py`. Prices and sources:
   `app/services/pricing.py` (Sarvam STT INR 30/h once + INR 20/10K chars per text version; embeddings per 1M tokens). Migrations
   `db/migrations/2026-10-18-hosted-models.sql` and `2026-10-20-sarvam-single-job.sql`.
-  Not verified against the real services: no Sarvam/Gemini/Cohere/OpenAI call has been made (mocked HTTP only); in particular the
+  Not verified against the real services: no Sarvam/Cohere/OpenAI call has been made (mocked HTTP only; ONE Gemini text call was made by
+  accident when a test run picked up the dev key from the container, it worked: JSON schema, thinkingLevel and temperature 0 accepted); in particular the
   text APIs' real size limits, whether Sarvam accepts a repeated `upload-files` for a `created` job, and whether Gemini returns usage.
 - **Worker threads and search timing.** `WHISPER_THREADS` (default 1, faster-whisper `cpu_threads`) and `TORCH_THREADS` (default 1,
   `torch.set_num_threads` in `worker_process_init`) keep one of the server's 2 CPUs free for the API; raise both on a bigger machine.

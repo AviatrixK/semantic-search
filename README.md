@@ -107,13 +107,17 @@ docker compose exec api python -m app.scripts.reprocess --embed-provider gemini 
 docker compose exec api python eval/run_provider_eval.py --providers local,gemini            # Recall@5, MRR, latency, cost (see backend/eval/README.md)
 docker compose exec api python -m app.scripts.reprocess --transcriber sarvam --dry-run        # re-transcribe with Sarvam: cost estimate first
 ```
-Notes: Sarvam transcribes each video once (INR 30/h); the romanised and English text of each chunk then come from its text APIs
-(INR 20 per 10K characters each, about INR 312 more per hour of video: `SARVAM_TEXT_VARIANTS` chooses which to make). A retry after a failure
-resumes the saved Sarvam job (`videos.sarvam_job_id`) instead of starting, and paying for, a new one. `SARVAM_MODEL=saaras:v4` falls back
-to v3 for languages it does not take. `MIN_SCORE_<PROVIDER>` sets the similarity cut-off per embedding provider.
-If an embedding provider is down or slow, search answers from keywords alone (`X-Search-Fallback: keyword-only`) and the page says so.
+Notes: Sarvam transcribes each video once (INR 30/h). The English and romanised text of each chunk then comes from `TEXT_VARIANT_PROVIDER`:
+`gemini` (default: a pinned Gemini Flash-Lite model, many chunks per request, validated JSON; about $0.09 per hour of video, an estimate until
+real tokens are recorded in `videos.text_variants_*`), `sarvam` (its text APIs, about INR 312 per hour) or `none`. **Privacy: when the
+provider is `gemini`, transcripts are sent to Google for translation.** If Gemini is down the video still finishes with its native text and is
+marked `pending`; `docker compose exec api python -m app.scripts.reprocess --video-ids <id>` then sends only the chunks that lack a variant.
+A retry after a failure resumes the saved Sarvam job (`videos.sarvam_job_id`) instead of starting, and paying for, a new one.
+`SARVAM_MODEL=saaras:v4` falls back to v3 for languages it does not take. `MIN_SCORE_<PROVIDER>` sets the similarity cut-off per embedding
+provider. If an embedding provider is down or slow, search answers from keywords alone (`X-Search-Fallback: keyword-only`) and the page says so.
 Keyword search uses two indexes: `simple` over the native and romanised text (words matched as written) and `english` over the English
 text (stemmed, so "speaking" finds "speak").
+Existing database, third migration: `... < db/migrations/2026-10-22-text-variants.sql` (status and token columns on `videos`; idempotent).
 
 ## Evaluation
 `backend/eval/` measures search quality against a hand-labelled gold set (Recall@1/@5, MRR, latency). See `backend/eval/README.md`:

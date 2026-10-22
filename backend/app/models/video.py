@@ -28,6 +28,15 @@ class Video(Base):
     # status: created | uploaded | started | accepted/pending/running/completed/failed (Sarvam's) | consumed (its transcript was used)
     sarvam_job_id: Mapped[str | None] = mapped_column(String)
     sarvam_job_status: Mapped[str | None] = mapped_column(String)
+    # Who made text_en / text_roman and how it went. status: complete | pending (some non-English chunks still lack them: a rerun of
+    # the reprocess script sends only those) | NULL (not applicable: Whisper videos, or provider "none"). The token columns hold what
+    # the model reported (output includes thinking tokens); `est` is the part that had to be estimated because the reply had no usage.
+    text_variants_status: Mapped[str | None] = mapped_column(String)
+    text_variants_provider: Mapped[str | None] = mapped_column(String)
+    text_variants_model: Mapped[str | None] = mapped_column(String)
+    text_variants_in_tokens: Mapped[int | None] = mapped_column(Integer)
+    text_variants_out_tokens: Mapped[int | None] = mapped_column(Integer)
+    text_variants_est_tokens: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

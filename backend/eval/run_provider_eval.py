@@ -184,8 +184,10 @@ def render_report(results: dict, *, k: int, n_queries: int, corpus: costs.Corpus
                  + (" (English variant assumed as long as the native one)." if assume_both_variants else ".")]
     parts += ["", "### Transcription cost per hour of video", metrics.markdown_table(["Engine", "Cost per hour of video"], [list(r) for r in transcriber_rows]),
               f"_Sarvam: ONE transcription job at INR {pricing.SARVAM_STT_INR_PER_HOUR:.0f} per hour of audio, billed per second, plus INR "
-              f"{pricing.SARVAM_TEXT_INR_PER_10K_CHARS:.0f} per 10K characters for each text version made from the chunk text (romanised, English); "
-              f"about {text_chars_per_hour:,.0f} characters per hour of video ({pricing.SARVAM_SOURCE})._"]
+              f"{pricing.SARVAM_TEXT_INR_PER_10K_CHARS:.0f} per 10K characters for each text version made by Sarvam's text APIs (romanised, English); "
+              f"about {text_chars_per_hour:,.0f} characters per hour of video ({pricing.SARVAM_SOURCE}). The Gemini row uses list prices "
+              f"({pricing.GEMINI_PRICING_SOURCE}) and ASSUMED token counts (see pricing.py: not measured until videos have been processed; "
+              f"videos.text_variants_in_tokens / _out_tokens hold the real ones)._"]
     for key, e in results["providers"].items():
         if e.get("skipped"):
             parts.append(f"\n_{key}: skipped, {e['skipped']}_")
@@ -194,13 +196,25 @@ def render_report(results: dict, *, k: int, n_queries: int, corpus: costs.Corpus
     return "\n".join(parts)
 
 
-def transcription_rows(inr_per_usd: float | None, variants_options=(0, 1, 2), text_chars_per_hour: float | None = None) -> list[tuple[str, str]]:
-    rows = [("whisper (local)", "no per-hour charge (your CPU time)")]
-    for v in variants_options:
-        inr = costs.transcription_per_hour_inr("sarvam", v, text_chars_per_hour)
-        usd = f" (about ${inr / inr_per_usd:.2f} at INR {inr_per_usd:g}/USD)" if inr_per_usd else ""
-        what = {0: "native only", 1: "native + one text version", 2: "native + romanised + English"}.get(v, f"native + {v} text versions")
-        rows.append((f"sarvam, {what}", f"INR {inr:.0f}{usd}"))
+def transcription_rows(inr_per_usd: float | None, text_chars_per_hour: float | None = None, text_model: str | None = None) -> list[tuple[str, str]]:
+    """Transcription cost per hour of video for every TEXT_VARIANT_PROVIDER. No exchange rate is assumed: without `inr_per_usd` the
+    Gemini row stays in USD next to the INR for speech-to-text."""
+    from app.core.config import settings
+    from app.services import pricing
+    model = text_model or settings.TEXT_VARIANT_MODEL
+    stt = costs.transcription_per_hour_inr("sarvam", 0)
+    usd_of = lambda inr: f" (about ${inr / inr_per_usd:.2f} at INR {inr_per_usd:g}/USD)" if inr_per_usd else ""
+    rows = [("whisper (local)", "no per-hour charge (your CPU time)"),
+            ("sarvam, native text only (TEXT_VARIANT_PROVIDER=none)", f"INR {stt:.0f}{usd_of(stt)}")]
+    s = costs.text_variants_per_hour("sarvam", None, text_chars_per_hour, inr_per_usd)
+    rows.append(("sarvam + its text APIs for roman and English (TEXT_VARIANT_PROVIDER=sarvam)", f"INR {stt + s['inr']:.0f}{usd_of(stt + s['inr'])}"))
+    g = costs.text_variants_per_hour("gemini", model, text_chars_per_hour, inr_per_usd)
+    if not g["known"]:
+        value = f"INR {stt:.0f} + unknown (no price for {model} in app/services/pricing.py)"
+    else:
+        total = f", about INR {stt + g['inr']:.0f} in all at INR {inr_per_usd:g}/USD" if g["inr"] is not None else ""
+        value = f"INR {stt:.0f} + ${g['usd']:.3f}{total}"
+    rows.append((f"sarvam + {model} for roman and English (TEXT_VARIANT_PROVIDER=gemini)", value))
     return rows
 
 

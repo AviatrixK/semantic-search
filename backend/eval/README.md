@@ -60,6 +60,9 @@ Saves `eval/results/providers-<timestamp>.json`.
   reported as invalid, not scored: search would silently fall back to keyword-only for it, which would make the numbers meaningless.
 - Cost uses list prices (`app/services/pricing.py`, with source links and dates) and about 4 characters per token unless the provider
   reports tokens. Indic scripts use more tokens per character, so real costs for Hindi and similar are higher.
+- The transcription table has one row per `TEXT_VARIANT_PROVIDER` (none / sarvam text APIs / Gemini model). The Gemini row is in USD from list
+  prices and ASSUMED token counts (`app/services/pricing.py`) unless `--inr-per-usd` is given; real tokens are recorded per video in
+  `videos.text_variants_in_tokens` / `_out_tokens`.
 - Sarvam transcription is shown separately in INR per hour of video: ONE speech-to-text job (INR 30/h) plus INR 20 per 10K characters
   for each text version (romanised, English) made from the chunk text; the characters per hour come from the corpus being evaluated. No
   exchange rate is assumed: pass `--inr-per-usd` to get a combined USD total.

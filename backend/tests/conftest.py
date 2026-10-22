@@ -51,6 +51,10 @@ os.environ.update({
     "MIN_SCORE": "0.25",
     "EMBED_CACHE_TTL_SEC": "604800",
     "SSE_KEEPALIVE_SEC": "0.2",
+    # Tests never talk to a paid service: no keys (a dev .env inside the container would otherwise leak real ones in), and the hosted
+    # text-variant provider is off unless a test turns it on with a mocked client.
+    "GEMINI_API_KEY": "", "SARVAM_API_KEY": "", "COHERE_API_KEY": "", "OPENAI_API_KEY": "",
+    "TEXT_VARIANT_PROVIDER": "none",
 })
 
 # /db/init.sql inside the api container (compose mounts ./db there); <repo>/db/init.sql on the host.
@@ -122,3 +126,14 @@ def db_session(api):
     db = SessionLocal()
     yield db
     db.close()
+
+
+@pytest.fixture(autouse=True)
+def no_real_network(monkeypatch):
+    """A test that reaches a real server through httpx fails at once (mocked transports and the ASGI test client are unaffected)."""
+    import httpx
+
+    def refuse(self, request):
+        raise RuntimeError(f"a test tried a real network call to {request.url.host}: mock the transport")
+
+    monkeypatch.setattr(httpx.HTTPTransport, "handle_request", refuse)

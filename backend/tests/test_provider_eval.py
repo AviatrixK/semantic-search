@@ -223,8 +223,11 @@ def test_the_report_has_the_tables_the_numbers_and_the_caveats(world):
                              text_chars_per_hour=50_000)
     assert "### Accuracy and warm latency (3 queries, k=5)" in text and "Recall@5" in text and "MRR@5" in text
     assert world.good.key in text and "100.0%" in text and "Median cold search" in text and "USD / 1,000 searches" in text
-    assert "sarvam, native + romanised + English | INR 230 (about $2.61 at INR 88/USD)" in text  # 30 + 2 x 5 x 20
-    assert "sarvam, native + one text version | INR 130" in text and "sarvam, native only | INR 30" in text
+    # one row per TEXT_VARIANT_PROVIDER; 50,000 characters per hour
+    assert "(TEXT_VARIANT_PROVIDER=sarvam) | INR 230 (about $2.61 at INR 88/USD)" in text  # 30 + 2 x 5 x 20
+    assert "(TEXT_VARIANT_PROVIDER=none) | INR 30 (about $0.34 at INR 88/USD)" in text
+    assert "sarvam + gemini-3.1-flash-lite for roman and English (TEXT_VARIANT_PROVIDER=gemini) | INR 30 + $0.059, about INR 35 in all at INR 88/USD" in text
+    assert "ASSUMED token counts" in text and "https://ai.google.dev/gemini-api/docs/pricing" in text
     assert "ONE transcription job" in text and "50,000 characters per hour" in text and "no per-hour charge" in text
     assert "nokey" in text and "skipped, not configured" in text
     assert "estimates" in text and "Indic scripts" in text
@@ -255,3 +258,34 @@ def test_main_rejects_unknown_providers_and_a_missing_gold_file(world, capsys):
     assert "does not exist" in capsys.readouterr().out
     with pytest.raises(SystemExit):
         rpe.main(["--queries", str(world.gold), "--k", "3"])  # Recall@5 needs k >= 5
+
+
+def test_transcription_rows_without_a_rate_keep_gemini_in_usd_and_never_invent_one():
+    rows = dict(rpe.transcription_rows(None, text_chars_per_hour=50_000))
+    gem = next(v for k, v in rows.items() if "TEXT_VARIANT_PROVIDER=gemini" in k)
+    assert gem == "INR 30 + $0.059" and "at INR" not in gem
+    unknown = dict(rpe.transcription_rows(None, text_model="gemini-9-imaginary"))
+    assert "unknown" in next(v for k, v in unknown.items() if "TEXT_VARIANT_PROVIDER=gemini" in k)
+
+
+def test_the_text_model_price_table_has_sources_and_the_pinned_default_is_priced():
+    from app.core.config import Settings
+    assert pricing.text_model_price(Settings.model_fields["TEXT_VARIANT_MODEL"].default) is not None  # the default can be costed
+    for model, p in pricing.TEXT_MODEL_PRICES.items():
+        assert p.source.startswith("https://ai.google.dev/") and 0 < p.usd_in_per_million < p.usd_out_per_million, model
+    assert pricing.text_model_cost_usd("gemini-3.1-flash-lite", 1_000_000, 1_000_000) == pytest.approx(0.25 + 1.50)
+    assert pricing.text_model_cost_usd("gemini-3.1-flash-lite", 2_000_000, 0) == pytest.approx(0.50)
+    assert pricing.text_model_cost_usd("not-a-model", 1, 1) is None
+
+
+def test_the_estimated_cost_per_hour_of_video_for_every_provider():
+    g = costs.text_variants_per_hour("gemini", "gemini-3.1-flash-lite", None, 88.0)
+    assert (g["tokens_in"], g["tokens_out"]) == (36_100, 55_770) and g["usd"] == pytest.approx(0.0927, abs=1e-4)
+    assert g["inr"] == pytest.approx(g["usd"] * 88)
+    assert costs.text_variants_per_hour("gemini", "gemini-3.1-flash-lite")["inr"] is None  # no rate given: no INR figure
+    assert costs.text_variants_per_hour("sarvam")["inr"] == pytest.approx(312.0)
+    assert costs.text_variants_per_hour("none") == {"provider": "none", "model": None, "inr": 0.0, "usd": 0.0, "known": True, "tokens_in": 0, "tokens_out": 0}
+    unknown = costs.text_variants_per_hour("gemini", "gemini-9-imaginary", None, 88.0)
+    assert unknown["known"] is False and unknown["usd"] is None and unknown["inr"] is None
+    # a pricier model costs more per hour for the same text
+    assert costs.text_variants_per_hour("gemini", "gemini-3.5-flash-lite")["usd"] > g["usd"] > costs.text_variants_per_hour("gemini", "gemini-2.5-flash-lite")["usd"]

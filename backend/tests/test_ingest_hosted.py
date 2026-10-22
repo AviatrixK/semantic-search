@@ -11,14 +11,16 @@ from unittest.mock import MagicMock, patch
 import pytest
 from sqlalchemy import text
 
+from app.core.config import settings
 from app.core.db import SessionLocal
 from app.models import Chunk, ChunkEmbedding, ChunkSentence, Job, Video
-from app.services import embedders, jobevents, media, sarvam, storage, transcription, vectorstore
+from app.services import embedders, jobevents, media, sarvam, storage, textvariants, transcription, vectorstore
 from app.services.embedders import (EmbeddingNotConfigured, EmbeddingRejected, EmbeddingUnavailable, GeminiEmbedder)
 from app.services.sarvam import (SarvamJobFailed, SarvamNoTimestamps, SarvamNotConfigured, SarvamRejected, SarvamUnavailable,
                                  TranscriptResult)
 from app.workers import tasks
 from tests.test_sarvam import FakeSarvam, client_for
+from tests.test_textvariants import FakeGemini
 
 REAL_TRANSCRIBE, REAL_ADD_TEXT = sarvam.transcribe_audio, sarvam.add_text_variants  # captured before any fixture patches them
 
@@ -82,6 +84,7 @@ def world(api, db_session, tmp_path):
          patch.object(media, "extract_audio_mp3", return_value=str(tmp_path / "a.mp3")), \
          patch.object(media, "extract_audio", return_value=str(tmp_path / "a.wav")), \
          patch.object(media, "duration_sec", return_value=55), patch.object(media, "needs_faststart", return_value=False), \
+         patch.object(settings, "TEXT_VARIANT_PROVIDER", "sarvam"), \
          patch.object(sarvam, "transcribe_audio", sar), patch.object(sarvam, "add_text_variants", fake_text_variants), \
          patch.object(embedders, "get_embedder", return_value=emb), \
          patch.object(jobevents, "publish"):
@@ -255,6 +258,116 @@ def test_a_permanent_failure_closes_the_saved_job_so_a_manual_retry_starts_fresh
     assert job_state(world) == ("job-1", "failed")  # Sarvam's own verdict is not overwritten
 
 
+# ---------------------------------------------------------------- Sarvam transcribes, Gemini Flash-Lite makes text_en / text_roman
+@pytest.fixture
+def gemini(world):
+    """TEXT_VARIANT_PROVIDER=gemini with a mocked Gemini API; Sarvam's own text APIs must stay unused."""
+    fake = FakeGemini()
+    world.gemini = fake
+    with patch.object(settings, "TEXT_VARIANT_PROVIDER", "gemini"), patch.object(textvariants, "GeminiTextClient", lambda: fake.client()), \
+         patch.object(sarvam, "add_text_variants", side_effect=AssertionError("Sarvam's text APIs must not be used when the provider is gemini")):
+        yield world
+
+
+def video_row(world):
+    world.db.expire_all()
+    return world.db.get(Video, world.video.id)
+
+
+def test_gemini_makes_the_english_and_romanised_text_and_the_tokens_are_recorded_per_video(gemini):
+    run(gemini)
+    chunks = gemini.db.query(Chunk).order_by(Chunk.idx).all()
+    assert len(chunks) == 3 and all(c.text_en.startswith("EN ") and c.text_roman.startswith("roman c") for c in chunks)
+    assert [c.text for c in chunks] == [c.text_native for c in chunks] and "मेरा" in chunks[0].text  # the shown text stays native
+    assert gemini.gemini.sizes == [3]  # all three chunks in ONE request
+    v = video_row(gemini)
+    assert (v.text_variants_provider, v.text_variants_model, v.text_variants_status) == ("gemini", "gemini-3.1-flash-lite", "complete")
+    assert (v.text_variants_in_tokens, v.text_variants_out_tokens, v.text_variants_est_tokens) == (100, 57, 0)
+    assert {r.field for r in gemini.db.query(ChunkEmbedding).all()} == {"native", "en"}  # the English text is embedded too
+    native_texts, en_texts = gemini.emb.document_calls
+    assert all(t.startswith("EN ") for t in en_texts) and not any(t.startswith("EN ") for t in native_texts)
+
+
+def test_a_gemini_outage_finishes_the_video_with_native_text_and_marks_the_variants_pending(gemini):
+    gemini.gemini.script[:] = [503] * 5
+    run(gemini)
+    v = video_row(gemini)
+    assert v.status == "ready" and gemini.db.get(Job, gemini.job.id).stage == "done"  # the video is searchable now
+    assert gemini.db.get(Job, gemini.job.id).error is None
+    assert (v.text_variants_status, v.text_variants_provider) == ("pending", "gemini")
+    chunks = gemini.db.query(Chunk).all()
+    assert chunks and all(c.text_en is None and c.text_roman is None and c.text_native for c in chunks)
+    assert {r.field for r in gemini.db.query(ChunkEmbedding).all()} == {"native"}  # no English vectors yet
+    assert gemini.sarvam.call_count == 1  # transcription was not redone
+
+
+def test_the_reprocess_script_fills_the_pending_variants_and_their_vectors_later_without_resending_anything_else(gemini):
+    from unittest.mock import MagicMock
+    from app.scripts import reprocess
+    gemini.gemini.script[:] = [503] * 5
+    run(gemini)
+    assert video_row(gemini).text_variants_status == "pending"
+    gemini.gemini.requests.clear()  # the service is back
+    code = reprocess.main(["--video-ids", str(gemini.video.id)], enqueue=MagicMock(), embedder=gemini.emb, confirm=lambda p: "y")
+    assert code == 0
+    v = video_row(gemini)
+    assert v.text_variants_status == "complete" and all(c.text_en and c.text_roman for c in gemini.db.query(Chunk).all())
+    assert {r.field for r in gemini.db.query(ChunkEmbedding).all()} == {"native", "en"}
+    assert gemini.gemini.sizes == [3] and gemini.sarvam.call_count == 1  # one request for the 3 chunks; no new transcription
+    assert (v.text_variants_in_tokens, v.text_variants_out_tokens) == (100, 57)  # the failed attempts returned no usage, so only this call counts
+    gemini.gemini.requests.clear()
+    assert reprocess.main(["--video-ids", str(gemini.video.id)], enqueue=MagicMock(), embedder=gemini.emb, confirm=lambda p: "y") == 0
+    assert gemini.gemini.requests == []  # idempotent: nothing was missing the second time
+
+
+def test_an_english_video_makes_no_gemini_calls_and_copies_the_text(gemini):
+    english = [{"start": 0.0, "end": 20.0, "text": "plain english speech here"}, {"start": 20.0, "end": 45.0, "text": "and some more words"}]
+    gemini.sarvam.return_value = TranscriptResult(segments=english, language="en-IN", engine="sarvam", audio_seconds=45.0, billed_seconds=45.0)
+    run(gemini)
+    assert gemini.gemini.requests == []
+    chunks = gemini.db.query(Chunk).all()
+    assert chunks and all(c.text_en == c.text and c.text_roman is None for c in chunks)
+    v = video_row(gemini)
+    assert v.text_variants_status == "complete" and (v.text_variants_in_tokens, v.text_variants_out_tokens) == (0, 0)
+
+
+def test_reingesting_replaces_the_token_totals_instead_of_adding_to_them(gemini):
+    run(gemini)
+    run(gemini)
+    v = video_row(gemini)
+    assert (v.text_variants_in_tokens, v.text_variants_out_tokens) == (100, 57)  # this ingest's tokens, not 200 / 114
+    assert len(gemini.gemini.requests) == 2  # a re-ingest has fresh chunks: they are all sent again
+
+
+def test_a_missing_gemini_key_fails_before_any_download_or_paid_transcription(world):
+    with patch.object(settings, "TEXT_VARIANT_PROVIDER", "gemini"), patch.object(settings, "GEMINI_API_KEY", ""), \
+         patch.object(storage, "download_to") as download, pytest.raises(textvariants.TextVariantNotConfigured):
+        run(world)
+    download.assert_not_called()
+    world.sarvam.assert_not_called()
+
+
+def test_provider_none_and_whisper_leave_the_variant_columns_empty(world):
+    with patch.object(settings, "TEXT_VARIANT_PROVIDER", "none"):
+        run(world)
+    v = video_row(world)
+    assert (v.text_variants_status, v.text_variants_provider, v.text_variants_in_tokens) == (None, None, None)
+    assert world.db.query(Chunk).first().text_en is None and fake_text_variants.calls == []
+    fake = FakeGemini()
+    segs = [{"start": 0.0, "end": 20.0, "text": "plain english speech here"}]
+    with patch.object(settings, "TEXT_VARIANT_PROVIDER", "gemini"), patch.object(textvariants, "GeminiTextClient", lambda: fake.client()), \
+         patch.object(transcription, "transcribe", return_value=(segs, "en")):
+        run(world, transcriber="whisper")
+    assert fake.requests == [] and video_row(world).text_variants_status is None  # Whisper videos never use the text provider
+
+
+def test_the_sarvam_text_api_path_still_works_and_records_its_provider(world):
+    run(world)  # the world fixture selects TEXT_VARIANT_PROVIDER=sarvam and fakes sarvam.add_text_variants
+    v = video_row(world)
+    assert (v.text_variants_provider, v.text_variants_model, v.text_variants_status) == ("sarvam", settings.SARVAM_TRANSLATE_MODEL, "complete")
+    assert v.text_variants_in_tokens is None  # Sarvam bills characters, not tokens
+
+
 def test_whisper_with_a_hosted_embedder_stores_only_the_native_vector_and_passes_the_language(world):
     segs = [{"start": 0.0, "end": 20.0, "text": "plain english speech here"}, {"start": 20.0, "end": 45.0, "text": "and some more words"}]
     with patch.object(transcription, "transcribe", return_value=(segs, "en")) as whisper:
@@ -304,7 +417,8 @@ def test_an_outage_of_a_hosted_service_is_retried(task, error):
     task.fail.assert_not_called()
 
 
-@pytest.mark.parametrize("error", [SarvamNotConfigured("x"), SarvamRejected("x"), SarvamJobFailed("x"), SarvamNoTimestamps("x"),
+@pytest.mark.parametrize("error", [textvariants.TextVariantNotConfigured("x"), textvariants.TextVariantRejected("x"),
+                                   SarvamNotConfigured("x"), SarvamRejected("x"), SarvamJobFailed("x"), SarvamNoTimestamps("x"),
                                    EmbeddingNotConfigured("x"), EmbeddingRejected("x")])
 def test_a_bad_key_a_rejected_request_or_a_failed_job_fails_at_once_with_a_readable_message(task, error):
     assert run_task(error) is None  # handled: no exception escapes, so Celery does not retry

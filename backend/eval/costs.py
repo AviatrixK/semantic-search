@@ -50,6 +50,15 @@ def per_video_hour_usd(corpus: Corpus, price: pricing.TokenPrice, *, assume_both
     return pricing.embedding_cost_usd(tph, price) if tph is not None else None
 
 
+def text_variants_per_hour(provider: str, model: str | None = None, text_chars_per_hour: float | None = None,
+                           inr_per_usd: float | None = None) -> dict:
+    """See pricing.text_variants_per_hour: the cost per hour of video of making text_en / text_roman with a TEXT_VARIANT_PROVIDER."""
+    if provider == "gemini" and model is None:
+        from app.core.config import settings
+        model = settings.TEXT_VARIANT_MODEL
+    return pricing.text_variants_per_hour(provider, model, text_chars_per_hour, inr_per_usd)
+
+
 def transcription_per_hour_inr(transcriber: str, variants: int = 2, text_chars_per_hour: float | None = None) -> float:
     """INR per hour of video: one speech-to-text job plus `variants` text-API versions of the chunk text. Whisper runs locally."""
     if transcriber != "sarvam":

@@ -32,6 +32,13 @@ CREATE TABLE videos (
   transcriber   TEXT,   -- engine that produced the current chunks: whisper | sarvam (NULL = whisper, older videos)
   sarvam_job_id     TEXT,  -- the Sarvam batch speech-to-text job for this video: a retry resumes it instead of starting (and paying for) a new one
   sarvam_job_status TEXT,  -- created | uploaded | started | the job states Sarvam reports (accepted, pending, running, completed, failed) | consumed
+  -- who made text_en / text_roman: status complete | pending (some non-English chunks still lack them) | NULL; tokens as reported by the model
+  text_variants_status      TEXT,
+  text_variants_provider    TEXT,
+  text_variants_model       TEXT,
+  text_variants_in_tokens   INT,
+  text_variants_out_tokens  INT,
+  text_variants_est_tokens  INT,
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE UNIQUE INDEX videos_sha256_key ON videos (sha256);

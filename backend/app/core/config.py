@@ -50,6 +50,18 @@ class Settings(BaseSettings):
     SARVAM_TRANSLATE_MODEL: str = "sarvam-translate:v1"  # 23 languages, 2000 characters per request; "mayura:v1": 11 languages, 1000
     SARVAM_TRANSLIT_MAX_CHARS: int = 1000  # the docs give no limit for /transliterate: stay well below any plausible one
     SARVAM_TEXT_TIMEOUT_SEC: float = 30.0
+    # ---- Who makes text_en (translation) and text_roman (romanisation) of each chunk after Sarvam has transcribed (TRANSCRIBER=sarvam):
+    # gemini = a Gemini Flash-Lite model, several chunks per request (needs GEMINI_API_KEY); sarvam = Sarvam's text APIs (SARVAM_TEXT_VARIANTS
+    # above); none = neither (native text only). Transcripts are SENT TO GOOGLE when this is gemini.
+    TEXT_VARIANT_PROVIDER: Literal["gemini", "sarvam", "none"] = "gemini"
+    TEXT_VARIANT_MODEL: str = "gemini-3.1-flash-lite"  # pinned on purpose: an alias such as "-latest" is refused, it could change under us
+    TEXT_VARIANT_BATCH_ITEMS: int = 15  # chunks per request, at most
+    TEXT_VARIANT_BATCH_CHARS: int = 6000  # and at most this many characters of chunk text per request
+    TEXT_VARIANT_TEMPERATURE: float = 0.0  # Google advises 1.0 for Gemini 3; 0 is what was asked for, and every answer is validated anyway
+    TEXT_VARIANT_THINKING: str = "minimal"  # generationConfig.thinkingConfig.thinkingLevel; empty = do not send it (thinking tokens are billed as output)
+    TEXT_VARIANT_MAX_OUTPUT_TOKENS: int = 16384
+    TEXT_VARIANT_TIMEOUT_SEC: float = 60.0
+    TEXT_VARIANT_RETRIES: int = 4  # extra attempts after 429 / 5xx / timeout, with exponential backoff (1, 2, 4, 8 s)
     SARVAM_POLL_SEC: float = 5.0
     SARVAM_JOB_TIMEOUT_SEC: int = 3 * 3600  # give up waiting for a batch job after this long
     SARVAM_MAX_FILE_SEC: int = 6600  # batch limit is 2 h per file: longer audio is split into parts of at most this length
@@ -101,6 +113,21 @@ class Settings(BaseSettings):
         if name not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
             raise ValueError(f"LOG_LEVEL must be DEBUG, INFO, WARNING, ERROR or CRITICAL (got {v!r})")
         return name
+
+    @field_validator("TEXT_VARIANT_MODEL")
+    @classmethod
+    def _pinned_text_model(cls, v: str) -> str:
+        v = v.strip()
+        if not v or v.endswith("-latest") or "latest" in v.split("-"):
+            raise ValueError("TEXT_VARIANT_MODEL must be a pinned model id such as gemini-3.1-flash-lite (no -latest alias)")
+        return v.removeprefix("models/")
+
+    @field_validator("TEXT_VARIANT_BATCH_ITEMS", "TEXT_VARIANT_BATCH_CHARS", "TEXT_VARIANT_MAX_OUTPUT_TOKENS")
+    @classmethod
+    def _positive(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError("must be at least 1")
+        return v
 
     @field_validator("EMBED_DIMENSIONS")
     @classmethod
