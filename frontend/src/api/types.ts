@@ -57,6 +57,17 @@ export interface Chunk {
   start_sec: number
   end_sec: number
   text: string
+  /** English translation of `text`; null/absent while pending. */
+  text_en?: string | null
+  /** Latin-script transcription of `text`; null/absent while pending. */
+  text_roman?: string | null
+}
+
+/** GET /api/videos/:id/transcript. */
+export interface Transcript {
+  /** The video's language code ("ta-IN" or "ta"); null when unknown. */
+  language: string | null
+  chunks: Chunk[]
 }
 
 export interface StreamOut {

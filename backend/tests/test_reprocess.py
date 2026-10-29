@@ -361,3 +361,85 @@ def test_if_the_service_is_still_down_the_chunks_stay_pending_and_the_next_run_r
     assert gemini.sizes == [4]
     lib.expire_all()
     assert lib.get(Video, v.id).text_variants_status == "complete" and vectors(lib, emb) == 8
+
+
+# ---------------------------------------------------------------- --fill-translations: backfill for the video page transcript
+TAMIL = ["வணக்கம் நண்பர்களே இன்று நாம் பேசுவோம்", "ஒரு நல்ல ஆசிரியர் கற்றுக்கொடுக்க வேண்டும்", "நன்றி மீண்டும் சந்திப்போம் நண்பர்களே"]
+
+
+def add_legacy_video(db, title="legacy", chunks=None, language="ta"):
+    """A video that predates translation: transcribed by Whisper, no text_variants_status, chunks without text_en / text_roman."""
+    v = Video(id=uuid.uuid4(), title=title, storage_key=f"raw/{title}.mp4", duration_sec=1800, status="ready", language=language)
+    db.add(v)
+    db.flush()
+    for i, t in enumerate(chunks or TAMIL):
+        db.add(Chunk(id=uuid.uuid4(), video_id=v.id, idx=i, start_sec=i * 30.0, end_sec=i * 30.0 + 30, text=t))
+    db.commit()
+    return v
+
+
+@pytest.fixture
+def gemini_key():
+    with patch.object(settings, "GEMINI_API_KEY", "test-key"):
+        yield
+
+
+def test_without_the_flag_a_legacy_video_is_not_touched(lib, gemini, gemini_key):
+    add_legacy_video(lib)
+    video = lib.query(Video).one()
+    assert reprocess.make_plan(lib, video, transcriber=None, embedder=FakeHosted(), busy=set()).action != "text"
+    plan = reprocess.make_plan(lib, video, transcriber=None, embedder=FakeHosted(), busy=set(), fill_translations=True)
+    assert (plan.action, plan.text_chunks) == ("text", 3)
+
+
+def test_dry_run_with_the_flag_shows_the_plan_and_a_cost_estimate_and_sends_nothing(lib, gemini, gemini_key, capsys):
+    v = add_legacy_video(lib)
+    code, _ = run(["--fill-translations", "--dry-run"])
+    out = capsys.readouterr().out
+    assert code == 0 and gemini.requests == [] and "3 chunk(s) without English/romanised text" in out
+    assert "to translate/romanise now" in out and "Dry run: nothing was changed." in out
+    lib.expire_all()
+    assert all(c.text_en is None for c in lib.query(Chunk).filter_by(video_id=v.id))
+
+
+def test_the_backfill_asks_first_fills_only_non_english_chunks_and_a_second_run_sends_nothing(lib, gemini, gemini_key, capsys):
+    v = add_legacy_video(lib, chunks=TAMIL + ["This part is already in English."])
+    code, _ = run(["--fill-translations", "--video-ids", str(v.id)], answer="n")
+    assert code == 1 and gemini.requests == [] and "Cancelled" in capsys.readouterr().out
+    code, _ = run(["--fill-translations", "--video-ids", str(v.id)])
+    assert code == 0 and gemini.sizes == [3]  # the English chunk was not sent
+    lib.expire_all()
+    rows = lib.query(Chunk).filter_by(video_id=v.id).order_by(Chunk.idx).all()
+    assert all(c.text_en and c.text_roman for c in rows[:3])
+    capsys.readouterr()
+    code, _ = run(["--fill-translations", "--video-ids", str(v.id)])
+    assert code == 0 and gemini.sizes == [3] and "Nothing to do" in capsys.readouterr().out.splitlines()[-1]  # idempotent: nothing sent
+
+
+def test_the_backfill_resumes_after_an_outage_and_sends_only_what_is_missing(lib, gemini, gemini_key):
+    v = add_legacy_video(lib)
+    gemini.script[:] = [503] * 5
+    run(["--fill-translations", "--video-ids", str(v.id)])
+    lib.expire_all()
+    assert all(c.text_en is None for c in lib.query(Chunk).filter_by(video_id=v.id))
+    gemini.requests.clear()
+    run(["--fill-translations", "--video-ids", str(v.id)])
+    assert gemini.sizes == [3]
+    run(["--fill-translations", "--video-ids", str(v.id)])
+    assert gemini.sizes == [3]
+
+
+def test_an_english_video_needs_no_backfill(lib, gemini, gemini_key, capsys):
+    add_legacy_video(lib, "en", ["Hello everyone, welcome to the class.", "Thank you all."], language="en")
+    code, _ = run(["--fill-translations"])
+    out = capsys.readouterr().out
+    assert code == 0 and gemini.requests == [] and "to translate/romanise now" not in out  # at most the unrelated vectors are filled
+
+
+def test_the_flag_needs_the_gemini_provider_and_a_key(lib, capsys):
+    with patch.object(settings, "TEXT_VARIANT_PROVIDER", "none"):
+        assert run(["--fill-translations", "--dry-run"])[0] == 1
+    assert "TEXT_VARIANT_PROVIDER=gemini" in capsys.readouterr().out
+    with patch.object(settings, "TEXT_VARIANT_PROVIDER", "gemini"), patch.object(settings, "GEMINI_API_KEY", ""):
+        assert run(["--fill-translations"])[0] == 1
+    assert "GEMINI_API_KEY is empty" in capsys.readouterr().out

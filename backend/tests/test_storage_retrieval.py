@@ -16,8 +16,9 @@ def test_put_json_writes_utf8_object():
 
 def test_list_chunks_maps_rows():
     db = MagicMock()
-    db.scalars.return_value.all.return_value = [SimpleNamespace(idx=0, start_sec=0.0, end_sec=30.0, text="a"),
-                                                SimpleNamespace(idx=1, start_sec=25.0, end_sec=55.0, text="b")]
+    db.scalars.return_value.all.return_value = [
+        SimpleNamespace(idx=0, start_sec=0.0, end_sec=30.0, text="a", text_en="A", text_roman="a"),
+        SimpleNamespace(idx=1, start_sec=25.0, end_sec=55.0, text="b", text_en=None, text_roman=None)]
     out = retrieval.list_chunks(db, uuid.uuid4())
-    assert out == [{"idx": 0, "start_sec": 0.0, "end_sec": 30.0, "text": "a"},
-                   {"idx": 1, "start_sec": 25.0, "end_sec": 55.0, "text": "b"}]
+    assert out == [{"idx": 0, "start_sec": 0.0, "end_sec": 30.0, "text": "a", "text_en": "A", "text_roman": "a"},
+                   {"idx": 1, "start_sec": 25.0, "end_sec": 55.0, "text": "b", "text_en": None, "text_roman": None}]

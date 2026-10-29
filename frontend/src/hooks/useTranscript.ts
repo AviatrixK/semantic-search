@@ -1,30 +1,35 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../api'
-import type { Chunk } from '../api'
+import type { Chunk, Transcript } from '../api'
 import { describeError } from '../api/errors'
-import { buildTranscript } from '../lib/transcript'
-import type { TranscriptLine } from '../lib/transcript'
 
 interface TranscriptState {
   status: 'loading' | 'ready' | 'error'
-  lines: TranscriptLine[]
+  chunks: Chunk[]
+  /** The video's language code, null when unknown. */
+  language: string | null
   error: string | null
 }
 
-/** The video's full transcript as non-repeating sentence lines (the API returns overlapping chunks). */
+const LOADING: TranscriptState = { status: 'loading', chunks: [], language: null, error: null }
+
+/**
+ * The video's transcript as the API returns it: overlapping chunks with their original, English and romanised text, plus the video's
+ * language. `buildTranscript` turns them into non-repeating lines in whichever language is shown.
+ */
 export function useTranscript(videoId: string) {
-  const [state, setState] = useState<TranscriptState>({ status: 'loading', lines: [], error: null })
+  const [state, setState] = useState<TranscriptState>(LOADING)
   const [attempt, setAttempt] = useState(0)
 
   useEffect(() => {
     const controller = new AbortController()
-    setState({ status: 'loading', lines: [], error: null })
+    setState(LOADING)
     api
-      .request<Chunk[]>(`/api/videos/${encodeURIComponent(videoId)}/transcript`, { signal: controller.signal })
+      .request<Transcript>(`/api/videos/${encodeURIComponent(videoId)}/transcript`, { signal: controller.signal })
       .then(
-        (chunks) => setState({ status: 'ready', lines: buildTranscript(chunks), error: null }),
+        (t) => setState({ status: 'ready', chunks: t.chunks, language: t.language, error: null }),
         (e: unknown) => {
-          if (!controller.signal.aborted) setState({ status: 'error', lines: [], error: describeError(e, 'transcript') })
+          if (!controller.signal.aborted) setState({ status: 'error', chunks: [], language: null, error: describeError(e, 'transcript') })
         },
       )
     return () => controller.abort()

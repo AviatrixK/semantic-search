@@ -11,7 +11,7 @@ from app.api.deps import CurrentUser, current_user, require_admin
 from app.core.config import settings
 from app.core.db import get_db
 from app.models import Job, Video
-from app.schemas.video import ChunkOut, JobOut, UploadOut, VideoOut
+from app.schemas.video import JobOut, TranscriptOut, UploadOut, VideoOut
 from app.services import dedupe, jobevents, languages, retrieval, storage
 
 log = logging.getLogger(__name__)
@@ -120,11 +120,12 @@ def stream_url(video_id: uuid.UUID, _: CurrentUser = Depends(current_user), db: 
     return {"url": storage.presigned_url(v.storage_key)}
 
 
-@router.get("/videos/{video_id}/transcript", response_model=list[ChunkOut])
+@router.get("/videos/{video_id}/transcript", response_model=TranscriptOut)
 def transcript(video_id: uuid.UUID, _: CurrentUser = Depends(current_user), db: Session = Depends(get_db)):
-    if not db.get(Video, video_id):
+    video = db.get(Video, video_id)
+    if not video:
         raise HTTPException(404, "Not found")
-    return retrieval.list_chunks(db, video_id)
+    return {"language": video.language, "chunks": retrieval.list_chunks(db, video_id)}
 
 
 @router.delete("/videos/{video_id}", status_code=204)

@@ -3,8 +3,9 @@ import { Link } from 'react-router-dom'
 import type { SearchHit, Video } from '../api'
 import { formatClock, formatDate, formatRelative } from '../lib/format'
 import { foundByBadge, scoreText } from '../lib/searchParams'
-import { chooseSnippet, languageLabel, markSegments, queryTerms } from '../lib/snippet'
+import { chooseSnippet, isNonEnglishVideo, languageLabel, markSegments, queryTerms } from '../lib/snippet'
 import type { SnippetPart } from '../lib/snippet'
+import { linkLangForQuery } from '../lib/transcriptLang'
 import type { SearchMode } from '../lib/searchParams'
 import { watchPath } from '../lib/timeParam'
 import VideoThumb from './VideoThumb'
@@ -42,7 +43,7 @@ export default function ResultCard({ hit, video, mode, query }: Props) {
   const score = scoreText(mode, hit.score)
   const uploaded = video ? formatRelative(video.created_at) || formatDate(video.created_at) : ''
   return (
-    <Link to={watchPath(hit.video_id, hit.start_sec)} className={styles.row}>
+    <Link to={watchPath(hit.video_id, hit.start_sec, linkLangForQuery(query, isNonEnglishVideo(hit.language, hit.text)))} className={styles.row}>
       <div className={styles.thumb}>
         <VideoThumb videoId={hit.video_id} duration={video?.duration_sec} />
       </div>

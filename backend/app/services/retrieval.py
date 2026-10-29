@@ -240,7 +240,8 @@ def hybrid_search(db: Session, query: str, k: int = 10, video_id: uuid.UUID | No
 
 def list_chunks(db: Session, video_id: uuid.UUID) -> list[dict]:
     rows = db.scalars(select(Chunk).where(Chunk.video_id == video_id).order_by(Chunk.idx)).all()
-    return [{"idx": c.idx, "start_sec": c.start_sec, "end_sec": c.end_sec, "text": c.text} for c in rows]
+    return [{"idx": c.idx, "start_sec": c.start_sec, "end_sec": c.end_sec, "text": c.text, "text_en": c.text_en,
+             "text_roman": c.text_roman} for c in rows]
 
 
 def log_query(db: Session, user_id: str, query: str, mode: str):

@@ -23,8 +23,12 @@ export function parseTimeParam(value: string | null | undefined): number | null 
   return seconds !== null && Number.isFinite(seconds) && seconds <= MAX_SECONDS ? seconds : null
 }
 
-/** Relative link to a moment of a video, e.g. /watch/abc?t=123 (whole seconds). */
-export function watchPath(videoId: string, seconds?: number): string {
+/** Relative link to a moment of a video, e.g. /watch/abc?t=123 (whole seconds), optionally with the transcript language (?lang=en). */
+export function watchPath(videoId: string, seconds?: number, lang?: string): string {
   const base = `/watch/${encodeURIComponent(videoId)}`
-  return seconds === undefined ? base : `${base}?t=${Math.max(0, Math.floor(seconds))}`
+  const query = [
+    seconds === undefined ? '' : `t=${Math.max(0, Math.floor(seconds))}`,
+    lang ? `lang=${encodeURIComponent(lang)}` : '',
+  ].filter(Boolean)
+  return query.length ? `${base}?${query.join('&')}` : base
 }

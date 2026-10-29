@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import Spinner from '../components/Spinner'
+import TranscriptLangToggle from '../components/TranscriptLangToggle'
 import TranscriptPanel from '../components/TranscriptPanel'
 import VideoPlayer from '../components/VideoPlayer'
 import type { SeekRequest } from '../components/VideoPlayer'
@@ -8,8 +9,10 @@ import { useTranscript } from '../hooks/useTranscript'
 import { useVideos } from '../hooks/useVideos'
 import { formatClock, formatDate, formatRelative } from '../lib/format'
 import { parseTimeParam, watchPath } from '../lib/timeParam'
-import { activeLineIndex } from '../lib/transcript'
-import type { TranscriptLine } from '../lib/transcript'
+import { isNonEnglishVideo } from '../lib/snippet'
+import { activeLineIndex, buildTranscript, seekRequest } from '../lib/transcript'
+import type { TranscriptLang, TranscriptLine } from '../lib/transcript'
+import { initialTranscriptLang, readSavedTranscriptLang, saveTranscriptLang } from '../lib/transcriptLang'
 import styles from './Watch.module.css'
 
 /** /watch/:videoId?t=123: the video with its full transcript. `t` (seconds, 2:03 or 1m30s) starts it at that moment. */
@@ -20,6 +23,16 @@ export default function Watch() {
   const { videos, loading, error: listError, retry } = useVideos()
   const video = videos?.find((v) => v.id === videoId)
   const transcript = useTranscript(videoId)
+  // Non-English videos get an Original | English | Romanized toggle. The user's saved choice wins, then ?lang= from the search link.
+  const toggleShown = transcript.status === 'ready' && transcript.chunks.length > 0 && isNonEnglishVideo(transcript.language, transcript.chunks[0].text)
+  const [saved] = useState(() => readSavedTranscriptLang())
+  const [picked, setPicked] = useState<TranscriptLang | null>(null)
+  const lang = toggleShown ? picked ?? initialTranscriptLang({ toggleShown, saved, urlLang: params.get('lang') }) : 'original'
+  const transcriptLines = useMemo(() => buildTranscript(transcript.chunks, lang), [transcript.chunks, lang])
+  const pickLang = useCallback((next: TranscriptLang) => {
+    setPicked(next)
+    saveTranscriptLang(next) // best effort: a blocked localStorage only means the choice is not remembered
+  }, [])
 
   const [request, setRequest] = useState<SeekRequest | null>(null)
   const nonce = useRef(0)
@@ -35,9 +48,9 @@ export default function Watch() {
   }, [videoId, tParam])
 
   useEffect(() => {
-    lines.current = transcript.lines
-    setActive(activeLineIndex(transcript.lines, time.current))
-  }, [transcript.lines])
+    lines.current = transcriptLines
+    setActive(activeLineIndex(transcriptLines, time.current))  // the same moment stays highlighted whichever language is shown
+  }, [transcriptLines])
 
   const onTime = useCallback((t: number) => {
     time.current = t
@@ -46,7 +59,7 @@ export default function Watch() {
   }, [])
 
   const seekTo = useCallback((line: TranscriptLine) => {
-    setRequest({ videoId, t: line.start, play: true, nonce: ++nonce.current })
+    setRequest(seekRequest(videoId, line, ++nonce.current))
   }, [videoId])
 
   async function copyLink() {
@@ -114,11 +127,12 @@ export default function Watch() {
               <button type="button" className="btn btn-secondary" onClick={transcript.retry}>Try again</button>
             </div>
           )}
-          {transcript.status === 'ready' && transcript.lines.length === 0 && (
+          {transcript.status === 'ready' && transcriptLines.length === 0 && (
             <p className={styles.muted}>No transcript yet. The video may still be processing, or it has no speech.</p>
           )}
-          {transcript.status === 'ready' && transcript.lines.length > 0 && (
-            <TranscriptPanel lines={transcript.lines} activeIndex={active} onSelect={seekTo} />
+          {toggleShown && <TranscriptLangToggle value={lang} onChange={pickLang} />}
+          {transcript.status === 'ready' && transcriptLines.length > 0 && (
+            <TranscriptPanel lines={transcriptLines} activeIndex={active} onSelect={seekTo} />
           )}
         </section>
       </div>

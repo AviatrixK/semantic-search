@@ -352,3 +352,17 @@ def test_hits_carry_text_en_text_roman_and_language(seeded, db_session, mode):
 def test_pending_translation_is_null_not_an_error(seeded):
     hits = seeded.get("/api/search?q=robots").json()
     assert hits and all(h["text_en"] is None and h["text_roman"] is None and h["language"] is None for h in hits)
+
+
+# ---------------------------------------------------------------- /transcript carries the three texts and the language
+def test_transcript_returns_native_english_and_roman_text_with_the_language(seeded, db_session):
+    db_session.execute(text("UPDATE videos SET language = 'ta-IN' WHERE id = :v"), {"v": seeded.v1.id})
+    db_session.execute(text("UPDATE chunks SET text_en = 'Hello all.', text_roman = 'Vanakkam.' WHERE video_id = :v AND idx = 0"),
+                       {"v": seeded.v1.id})
+    db_session.commit()
+    body = seeded.get(f"/api/videos/{seeded.v1.id}/transcript").json()
+    assert body["language"] == "ta-IN"
+    first, second = body["chunks"][0], body["chunks"][1]
+    assert (first["idx"], first["text_en"], first["text_roman"]) == (0, "Hello all.", "Vanakkam.") and first["text"].startswith("Hello everyone")
+    assert second["text_en"] is None and second["text_roman"] is None  # pending: null, never an error
+    assert seeded.get(f"/api/videos/{seeded.v2.id}/transcript").json()["language"] is None

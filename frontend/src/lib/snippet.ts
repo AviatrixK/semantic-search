@@ -61,6 +61,11 @@ export function isEnglish(language: string | null | undefined): boolean {
   return !!language && /^en([-_]|$)/i.test(language.trim())
 }
 
+/** True when a video is not in English: by its language code, or (code unknown) by the script of a sample of its text. */
+export function isNonEnglishVideo(language: string | null | undefined, sampleText: string): boolean {
+  return language ? !isEnglish(language) : scriptOf(sampleText) !== 'latin'
+}
+
 /**
  * Display name of a video's language for the badge: "ta-IN" (Sarvam) and "ta" (Whisper) both give "Tamil". Null when the language is
  * unknown or unrecognised, so no badge is shown rather than a wrong one.
@@ -92,8 +97,7 @@ export function languageLabel(code: string | null | undefined): string | null {
 export function chooseSnippet(hit: SnippetHit, query: string, swapped = false): SnippetChoice {
   const original: SnippetPart = { kind: 'original', text: hit.text }
   const en = (hit.text_en ?? '').trim()
-  const nonEnglish = hit.language ? !isEnglish(hit.language) : scriptOf(hit.text) !== 'latin'
-  if (!nonEnglish || !en || en === hit.text.trim()) return { primary: original, secondary: null }
+  if (!isNonEnglishVideo(hit.language, hit.text) || !en || en === hit.text.trim()) return { primary: original, secondary: null }
   const english: SnippetPart = { kind: 'english', text: en }
   const qs = scriptOf(query)
   const originalFirst = qs !== '' && qs === scriptOf(hit.text)

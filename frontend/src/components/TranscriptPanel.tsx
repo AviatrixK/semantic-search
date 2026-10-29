@@ -64,7 +64,10 @@ export default function TranscriptPanel({ lines, activeIndex, onSelect }: Props)
                 }}
               >
                 <time className={styles.time}>{formatDuration(line.start)}</time>
-                <span>{line.text}</span>
+                <span>
+                  {line.text}
+                  {line.pending && <span className={styles.pending}> translation pending</span>}
+                </span>
               </button>
             </li>
           ))}

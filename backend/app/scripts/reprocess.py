@@ -12,6 +12,9 @@ What happens to each video:
   text         the video was transcribed but the English / romanised text of some chunks is still missing (videos.text_variants_status is
                "pending": the translation service was down or answered badly during ingest). ONLY the chunks that lack a variant are
                sent to TEXT_VARIANT_MODEL, then the vectors that depend on them are embedded. Nothing is sent twice.
+               --fill-translations extends this to EVERY video whose non-English chunks lack a variant, whatever its status (videos
+               ingested before translation existed, or transcribed by Whisper): the video page transcript needs text_en / text_roman.
+               No audio is touched, nothing is re-transcribed; chunks already in Latin letters are never sent.
   embed        the transcript is fine, but this embedding provider has no vectors for some of its text yet: only those are embedded
                here, in batches, each batch committed (the cost is tokens, no audio).
   up-to-date   nothing to do.   busy: a job is running for it, left alone.
@@ -66,13 +69,15 @@ def missing_for(db, embedder, video_id) -> list[tuple[uuid.UUID, str, str]]:
     return vectorstore.missing(db, embedder, [video_id])
 
 
-def make_plan(db, video, *, transcriber: str | None, embedder, busy: set) -> Plan:
+def make_plan(db, video, *, transcriber: str | None, embedder, busy: set, fill_translations: bool = False) -> Plan:
     if video.id in busy:
         return Plan(video.id, video.title, "busy", "a processing job is running for it")
     if transcriber and current_engine(video) != transcriber:
         return Plan(video.id, video.title, "transcribe", f"{current_engine(video)} -> {transcriber}", audio_seconds=float(video.duration_sec or 0))
-    if getattr(video, "text_variants_status", None) == "pending" and settings.TEXT_VARIANT_PROVIDER == "gemini":
+    if (fill_translations or getattr(video, "text_variants_status", None) == "pending") and settings.TEXT_VARIANT_PROVIDER == "gemini":
         todo = textvariants.chunks_needing_variants(db, video.id)
+        if fill_translations:  # only chunks that cost a model call: a Latin-script chunk needs no translation for the transcript
+            todo = [c for c in todo if textvariants.needs_model((c.text_native or c.text).strip())]
         if todo:
             return Plan(video.id, video.title, "text", f"{len(todo)} chunk(s) without English/romanised text", text_chunks=len(todo),
                         text_chars=sum(len((c.text_native or c.text).strip()) for c in todo))
@@ -180,6 +185,8 @@ def main(argv: list[str] | None = None, *, enqueue=None, embedder=None, confirm=
     ap.add_argument("--transcriber", choices=["whisper", "sarvam"], help="re-transcribe videos not yet done by this engine")
     ap.add_argument("--embed-provider", choices=list(embedders.PROVIDERS), help="embedding provider to fill (default: EMBED_PROVIDER)")
     ap.add_argument("--inr-per-usd", type=float, help="exchange rate, only used to show the Gemini cost in INR too (none is assumed)")
+    ap.add_argument("--fill-translations", action="store_true",
+                    help="also make the missing English / romanised text of videos that are not marked pending (for the video page transcript)")
     ap.add_argument("--dry-run", action="store_true", help="print the plan and the estimated cost, change nothing")
     ap.add_argument("--yes", action="store_true", help="do not ask before spending money")
     args = ap.parse_args(argv)
@@ -188,12 +195,18 @@ def main(argv: list[str] | None = None, *, enqueue=None, embedder=None, confirm=
     except ValueError as exc:
         ap.error(f"bad video id: {exc}")
 
+    if args.fill_translations and settings.TEXT_VARIANT_PROVIDER != "gemini":
+        print(f"--fill-translations needs TEXT_VARIANT_PROVIDER=gemini (it is {settings.TEXT_VARIANT_PROVIDER!r}): nothing was changed.")
+        return 1
     embedder = embedder or embedders.get_embedder(args.embed_provider)
     if not args.dry_run:
         try:
             embedder.check_configured()  # a missing key should stop the run now, not after the first video
         except embedders.EmbeddingNotConfigured as exc:
             print(f"{exc}: nothing was changed.")
+            return 1
+        if args.fill_translations and not settings.GEMINI_API_KEY:
+            print("GEMINI_API_KEY is empty: nothing was changed.")
             return 1
         if args.transcriber == "sarvam" and not settings.SARVAM_API_KEY:
             print("SARVAM_API_KEY is empty: nothing was changed.")
@@ -208,7 +221,8 @@ def main(argv: list[str] | None = None, *, enqueue=None, embedder=None, confirm=
             print("Unknown video id(s): " + ", ".join(str(i) for i in set(ids) - {v.id for v in videos}))
             return 1
         busy = set(db.scalars(select(Job.video_id).where(Job.stage.in_(jobevents.ACTIVE_STAGES))).all())
-        plans = [make_plan(db, v, transcriber=args.transcriber, embedder=embedder, busy=busy) for v in videos]
+        plans = [make_plan(db, v, transcriber=args.transcriber, embedder=embedder, busy=busy,
+                           fill_translations=args.fill_translations) for v in videos]
         by_video = {v.id: v for v in videos}
 
         for p in plans:

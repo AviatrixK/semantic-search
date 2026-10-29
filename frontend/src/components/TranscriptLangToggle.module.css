@@ -1,0 +1,36 @@
+.group {
+  display: inline-flex;
+  margin-bottom: 0.6rem;
+  padding: 2px;
+  background: var(--chip);
+  border-radius: 999px;
+}
+
+.option {
+  padding: 0.25rem 0.85rem;
+  font: inherit;
+  font-size: 0.85rem;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.option:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+
+.on {
+  color: var(--text);
+  font-weight: 600;
+  background: var(--surface);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.15);
+}
+
+@media (pointer: coarse) {
+  .option {
+    min-height: 44px;
+  }
+}

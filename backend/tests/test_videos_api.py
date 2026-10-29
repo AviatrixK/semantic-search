@@ -142,12 +142,19 @@ def test_reprocess_requires_admin(client):
 
 def test_transcript_returns_ordered_chunks(client, db):
     app.dependency_overrides[current_user] = lambda: CurrentUser(id=str(uuid.uuid4()), role="user")  # any user
-    db.get.return_value = MagicMock()
-    rows = [{"idx": 0, "start_sec": 0.0, "end_sec": 30.0, "text": "a"},
-            {"idx": 1, "start_sec": 25.0, "end_sec": 55.0, "text": "b"}]
+    db.get.return_value = MagicMock(language="ta-IN")
+    rows = [{"idx": 0, "start_sec": 0.0, "end_sec": 30.0, "text": "a", "text_en": "A", "text_roman": "a."},
+            {"idx": 1, "start_sec": 25.0, "end_sec": 55.0, "text": "b", "text_en": None, "text_roman": None}]  # 2nd: translation pending
     with patch.object(retrieval, "list_chunks", return_value=rows):
         r = client.get(f"/api/videos/{VIDEO_ID}/transcript")
-    assert r.status_code == 200 and r.json() == rows
+    assert r.status_code == 200 and r.json() == {"language": "ta-IN", "chunks": rows}
+
+
+def test_transcript_language_may_be_unknown(client, db):
+    app.dependency_overrides[current_user] = lambda: CurrentUser(id=str(uuid.uuid4()), role="user")
+    db.get.return_value = MagicMock(language=None)
+    with patch.object(retrieval, "list_chunks", return_value=[]):
+        assert client.get(f"/api/videos/{VIDEO_ID}/transcript").json() == {"language": None, "chunks": []}
 
 
 def test_transcript_404(client, db):

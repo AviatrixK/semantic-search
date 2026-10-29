@@ -28,7 +28,14 @@ class ChunkOut(BaseModel):
     idx: int
     start_sec: float
     end_sec: float
-    text: str
+    text: str  # the video's own language/script
+    text_en: str | None = None  # English translation; None while pending
+    text_roman: str | None = None  # Latin-script transcription of `text`; None while pending (or when `text` is already Latin)
+
+
+class TranscriptOut(BaseModel):
+    language: str | None  # the video's language code ("ta-IN" / "ta"); None = unknown
+    chunks: list[ChunkOut]  # overlapping ~30 s windows: the browser turns them into non-repeating lines
 
 
 class SearchHit(BaseModel):
