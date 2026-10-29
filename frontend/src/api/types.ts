@@ -37,6 +37,12 @@ export interface SearchHit {
   start_sec: number
   end_sec: number
   text: string
+  /** English translation of `text`; null/absent while pending. */
+  text_en?: string | null
+  /** Latin-script transcription of `text` (not shown yet). */
+  text_roman?: string | null
+  /** The video's language code ("ta-IN" or "ta"); null when unknown. */
+  language?: string | null
   /** Cosine similarity, 0..1 (keyword mode: a 0..1 keyword relevance). */
   score: number
   /** The sentence of `text` that best matches the query (a substring of it), or null. */

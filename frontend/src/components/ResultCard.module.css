@@ -80,9 +80,47 @@
   color: var(--muted);
 }
 
-.text strong {
+.text mark,
+.original mark {
   color: var(--text);
+  background: none;
   font-weight: 600;
+}
+
+/* the other version of the text: smaller and grey */
+.original {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin: 0;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  color: var(--muted);
+  opacity: 0.85;
+}
+
+.lang {
+  flex: none;
+  padding: 0.05rem 0.55rem;
+  font-size: 0.72rem;
+  color: var(--primary);
+  background: var(--primary-soft);
+  border-radius: 6px;
+  white-space: nowrap;
+}
+
+.toggle {
+  flex: none;
+  padding: 0.05rem 0.3rem;
+  font: inherit;
+  font-size: 0.75rem;
+  color: var(--primary);
+  background: none;
+  border: 0;
+  cursor: pointer;
+  text-decoration: underline;
 }
 
 .foot {

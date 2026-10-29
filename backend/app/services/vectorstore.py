@@ -87,7 +87,7 @@ def nearest(db: Session, embedder, qv: list[float], limit: int, video_id=None, u
     if uploaded_after:
         where.append("v.created_at >= :after")
         params["after"] = datetime.combine(uploaded_after, time.min, tzinfo=timezone.utc)
-    sql = (f"SELECT c.id AS chunk_id, c.video_id, v.title, c.start_sec, c.end_sec, c.text, ce.field, "
+    sql = (f"SELECT c.id AS chunk_id, c.video_id, v.title, c.start_sec, c.end_sec, c.text, c.text_en, c.text_roman, v.language, ce.field, "
            f"{expr} <=> CAST(:q AS vector({dim})) AS dist "
            f"FROM chunk_embeddings ce JOIN chunks c ON c.id = ce.chunk_id JOIN videos v ON v.id = c.video_id "
            f"WHERE {' AND '.join(where)} ORDER BY {expr} <=> CAST(:q AS vector({dim})) LIMIT :lim")
@@ -97,7 +97,8 @@ def nearest(db: Session, embedder, qv: list[float], limit: int, video_id=None, u
     for r in db.execute(text(sql), params):
         if r.chunk_id not in hits:  # rows arrive best first, so the first row of a chunk is its better variant
             hits[r.chunk_id] = {"chunk_id": r.chunk_id, "video_id": str(r.video_id), "title": r.title, "start_sec": r.start_sec,
-                                "end_sec": r.end_sec, "text": r.text, "score": round(1 - r.dist, 4), "matched": r.field}
+                                "end_sec": r.end_sec, "text": r.text, "text_en": r.text_en, "text_roman": r.text_roman,
+                                "language": r.language, "score": round(1 - r.dist, 4), "matched": r.field}
     return list(hits.values())[:limit]
 
 

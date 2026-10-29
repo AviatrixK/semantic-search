@@ -36,7 +36,10 @@ class SearchHit(BaseModel):
     title: str
     start_sec: float
     end_sec: float
-    text: str
+    text: str  # the transcript in the video's own language/script
+    text_en: str | None = None  # English translation; None while still pending (or for English speech without a copy)
+    text_roman: str | None = None  # Latin-script transcription of `text`
+    language: str | None = None  # the video's language code ("ta-IN" from Sarvam, "ta" from Whisper); None = unknown
     score: float
     highlight: str | None = None
     rrf: float | None = None  # hybrid mode: Reciprocal Rank Fusion score (the ranking key)

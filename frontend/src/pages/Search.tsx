@@ -112,7 +112,7 @@ export default function Search() {
         <ul className={`${styles.list} ${loading ? styles.stale : ''}`} aria-label="Search results" aria-busy={loading}>
           {state.hits.map((hit) => (
             <li key={`${hit.video_id}:${hit.start_sec}`}>
-              <ResultCard hit={hit} video={byId.get(hit.video_id)} mode={shownMode} />
+              <ResultCard hit={hit} video={byId.get(hit.video_id)} mode={shownMode} query={state.query} />
             </li>
           ))}
         </ul>

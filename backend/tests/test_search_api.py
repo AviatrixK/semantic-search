@@ -333,3 +333,22 @@ def test_headers_flag_the_slow_fallback_and_it_is_logged(seeded, db_session, cap
     assert r.headers["X-Search-Highlight"] == "stored=0, fallback=2, single=1"
     assert "hl_embed;dur=" in r.headers["Server-Timing"]
     assert any("chunk_sentences" in m for m in caplog.messages)
+
+
+# ---------------------------------------------------------------- English / romanised text and language on every hit
+@pytest.mark.parametrize("mode", ["vector", "keyword", "hybrid"])
+def test_hits_carry_text_en_text_roman_and_language(seeded, db_session, mode):
+    db_session.execute(text("UPDATE videos SET language = 'ta-IN' WHERE id = :v"), {"v": seeded.v1.id})
+    db_session.execute(text("UPDATE chunks SET text_en = 'Robots can teach us.', text_roman = 'Robots namakku kaRRuk kodukkum.' "
+                            "WHERE video_id = :v AND idx = 0"), {"v": seeded.v1.id})
+    db_session.commit()
+    hits = seeded.get(f"/api/search?q=robots&mode={mode}&video_id={seeded.v1.id}").json()
+    first = next(h for h in hits if h["start_sec"] == 0)
+    assert first["text_en"] == "Robots can teach us." and first["text_roman"] == "Robots namakku kaRRuk kodukkum."
+    assert first["text"].startswith("Hello everyone")  # the native text is still there next to them
+    assert all(h["language"] == "ta-IN" for h in hits)
+
+
+def test_pending_translation_is_null_not_an_error(seeded):
+    hits = seeded.get("/api/search?q=robots").json()
+    assert hits and all(h["text_en"] is None and h["text_roman"] is None and h["language"] is None for h in hits)

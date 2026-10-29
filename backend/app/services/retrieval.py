@@ -91,7 +91,8 @@ def _filters(stmt, video_id, uploaded_after):
 
 def _row_to_hit(r, score: float) -> dict:
     return {"chunk_id": r.chunk_id, "video_id": str(r.video_id), "title": r.title, "start_sec": r.start_sec,
-            "end_sec": r.end_sec, "text": r.text, "score": round(score, 4)}
+            "end_sec": r.end_sec, "text": r.text, "text_en": r.text_en, "text_roman": r.text_roman, "language": r.language,
+            "score": round(score, 4)}
 
 
 def _query_vec(embedder, query: str, timings: Timings | None = None) -> list[float] | None:
@@ -119,7 +120,7 @@ def _vector_candidates(db: Session, qv: list[float], limit: int, video_id, uploa
             return vectorstore.nearest(db, embedder, qv, limit, video_id, uploaded_after)
     dist = Chunk.embedding.cosine_distance(qv)
     stmt = _filters(select(Chunk.id.label("chunk_id"), Chunk.video_id, Video.title, Chunk.start_sec, Chunk.end_sec, Chunk.text,
-                           dist.label("dist")).join(Video, Video.id == Chunk.video_id).where(Chunk.embedding.is_not(None))
+                           Chunk.text_en, Chunk.text_roman, Video.language, dist.label("dist")).join(Video, Video.id == Chunk.video_id).where(Chunk.embedding.is_not(None))
                     .order_by(dist).limit(limit), video_id, uploaded_after)
     # HNSW returns at most ef_search rows (default 40) however large LIMIT is, and filters apply after the index scan.
     with measure(timings, "vector_sql"):
@@ -168,7 +169,8 @@ def _keyword_candidates(db: Session, query: str, limit: int, video_id, uploaded_
     tsq_en = func.websearch_to_tsquery("english", query)
     tsv, tsv_en = literal_column("chunks.tsv"), literal_column("chunks.tsv_en")
     rank = func.ts_rank_cd(tsv, tsq) + func.ts_rank_cd(tsv_en, tsq_en)
-    cols = [Chunk.id.label("chunk_id"), Chunk.video_id, Video.title, Chunk.start_sec, Chunk.end_sec, Chunk.text, rank.label("rank")]
+    cols = [Chunk.id.label("chunk_id"), Chunk.video_id, Video.title, Chunk.start_sec, Chunk.end_sec, Chunk.text,
+            Chunk.text_en, Chunk.text_roman, Video.language, rank.label("rank")]
     legacy_cosine = qv is not None and embedder.uses_legacy_column
     if legacy_cosine:
         cols.append(Chunk.embedding.cosine_distance(qv).label("dist"))
